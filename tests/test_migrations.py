@@ -13,7 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TABLES = {
     "users", "workspaces", "workspace_members", "projects",
-    "tasks", "labels", "task_labels", "comments",
+    "tasks", "labels", "task_labels", "comments", "refresh_tokens",
 }
 
 
@@ -43,7 +43,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(tables, TABLES | {"alembic_version"})
                 self.assertEqual(
                     connection.execute("SELECT version_num FROM alembic_version").fetchone(),
-                    ("0001",),
+                    ("0002",),
                 )
                 connection.execute(
                     "INSERT INTO users "
@@ -56,6 +56,14 @@ class MigrationTests(unittest.TestCase):
             self.run_alembic(url, "upgrade", "head")
             with closing(sqlite3.connect(database)) as connection, connection:
                 self.assertEqual(connection.execute("SELECT count(*) FROM users").fetchone(), (1,))
+            self.run_alembic(url, "downgrade", "0001")
+            with closing(sqlite3.connect(database)) as connection, connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM users").fetchone(), (1,))
+                self.assertEqual(connection.execute(
+                    "SELECT name FROM sqlite_master WHERE name = 'refresh_tokens'"
+                ).fetchall(), [])
+            self.run_alembic(url, "upgrade", "head")
+            self.run_alembic(url, "check")
             self.run_alembic(url, "downgrade", "base")
             with closing(sqlite3.connect(database)) as connection, connection:
                 tables = {
@@ -74,7 +82,7 @@ class MigrationTests(unittest.TestCase):
         for table in TABLES:
             self.assertIn(f"CREATE TABLE {table}", sql)
         self.assertIn("INSERT INTO alembic_version", sql)
-        rollback_sql = self.run_alembic(url, "downgrade", "0001:base", "--sql")
+        rollback_sql = self.run_alembic(url, "downgrade", "0002:base", "--sql")
         for table in TABLES:
             self.assertIn(f"DROP TABLE {table}", rollback_sql)
 
