@@ -24,6 +24,19 @@ app = FastAPI(
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 
+@app.get("/.well-known/jwks.json", tags=["auth"])
+def jwks():
+    import json
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    from jwt.algorithms import RSAAlgorithm
+    from app.core.security import read_key
+
+    key = load_pem_public_key(read_key(settings.JWT_PUBLIC_KEY_PATH))
+    public_jwk = json.loads(RSAAlgorithm.to_jwk(key))
+    public_jwk.update(kid=settings.JWT_KEY_ID, use="sig", alg="RS256")
+    return {"keys": [public_jwk]}
+
+
 @app.get("/healthy", tags=["system"])
 async def healthy_check():
     return {

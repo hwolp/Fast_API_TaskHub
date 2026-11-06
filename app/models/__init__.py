@@ -11,6 +11,7 @@ from app.models.label import Label, TaskLabel
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
+from app.models.refresh_token import RefreshToken
 from app.models.workspace import Workspace, WorkspaceMember
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "TaskStatus",
     "TaskPriority",
     "User",
+    "RefreshToken",
     "Workspace",
     "WorkspaceMember",
     "Project",

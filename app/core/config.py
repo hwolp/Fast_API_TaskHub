@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,8 +6,17 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "FastAPI TaskHub"
     DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
-    DATABASE_URL: str = "sqlite+aiosqlite:///D:/Nam4/Naite/taskhub.db"
     SECRET_KEY: str = "your-secret-key-here"
+    JWT_PRIVATE_KEY_PATH: str = ".keys/private.pem"
+    JWT_PUBLIC_KEY_PATH: str = ".keys/public.pem"
+    JWT_KEY_ID: str = "taskhub-1"
+    JWT_ISSUER: str = "taskhub"
+    JWT_AUDIENCE: str = "taskhub-api"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, gt=0)
+    DATABASE_URL: str = (
+        "mysql+aiomysql://root:password@localhost:3306/taskhub_db?charset=utf8mb4"
+    )
 
     @field_validator("DEBUG", mode="before")
     @classmethod
