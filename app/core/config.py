@@ -6,8 +6,10 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "FastAPI TaskHub"
     DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
-    DATABASE_URL: str = "sqlite+aiosqlite:///D:/Nam4/Naite/taskhub.db"
     SECRET_KEY: str = "your-secret-key-here"
+    DATABASE_URL: str = (
+        "mysql+aiomysql://root:password@localhost:3306/taskhub_db?charset=utf8mb4"
+    )
 
     @field_validator("DEBUG", mode="before")
     @classmethod
