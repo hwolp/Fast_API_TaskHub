@@ -19,6 +19,10 @@ def unauthorized(detail: str) -> HTTPException:
     return HTTPException(401, detail=detail, headers={"WWW-Authenticate": "Bearer"})
 
 
+def forbidden(detail: str = "forbidden") -> HTTPException:
+    return HTTPException(403, detail=detail)
+
+
 def read_key(path: str) -> bytes:
     return (ROOT / path).read_bytes()
 
