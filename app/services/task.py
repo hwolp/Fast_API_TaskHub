@@ -1,7 +1,10 @@
 from fastapi import HTTPException
 
 from app.core.permissions import (
-    can_create_task, can_delete_task, can_modify_task, effective_role,
+    can_create_task,
+    can_delete_task,
+    can_modify_task,
+    effective_role,
 )
 from app.core.security import forbidden
 from app.models import Task, User
@@ -15,7 +18,9 @@ class TaskService:
         self.repository = repository
 
     async def _role(self, workspace_id: int, user: User) -> WorkspaceRole | None:
-        return effective_role(user, await self.repository.workspace_role(workspace_id, user.id))
+        return effective_role(
+            user, await self.repository.workspace_role(workspace_id, user.id)
+        )
 
     async def _load(self, task_id: int, user: User) -> tuple[Task, WorkspaceRole, int]:
         found = await self.repository.get_with_workspace(task_id)
@@ -39,8 +44,17 @@ class TaskService:
             await self._ensure_assignee(workspace_id, data.assignee_id)
         return await self.repository.create(**data.model_dump(), created_by=user.id)
 
-    async def list_tasks(self, user: User, *, page: int, limit: int) -> tuple[list[Task], int]:
-        return await self.repository.list_visible(user, page=page, limit=limit)
+    async def list_tasks(
+        self,
+        user: User,
+        *,
+        project_id: int | None = None,
+        page: int,
+        limit: int,
+    ) -> tuple[list[Task], int]:
+        return await self.repository.list_visible(
+            user, project_id=project_id, page=page, limit=limit
+        )
 
     async def get_task(self, task_id: int, user: User) -> Task:
         task, _, _ = await self._load(task_id, user)
