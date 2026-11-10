@@ -14,13 +14,10 @@ class TaskBase(BaseModel):
 
 
 class TaskCreate(TaskBase):
-    # created_by is NOT accepted from the client: it is taken from the access token.
     project_id: int = Field(..., description="ID dự án chứa task")
 
 
 class TaskUpdate(BaseModel):
-    # project_id is intentionally not updatable: moving a task across projects
-    # would cross workspace authorization boundaries.
     title: str | None = Field(default=None, min_length=1, max_length=255, description="Tiêu đề task")
     status: TaskStatus | None = Field(default=None, description="Trạng thái task")
     priority: TaskPriority | None = Field(default=None, description="Mức độ ưu tiên")
@@ -29,8 +26,6 @@ class TaskUpdate(BaseModel):
 
     @model_validator(mode="after")
     def reject_null_for_required_columns(self) -> "TaskUpdate":
-        # Omitting a field means "keep current value"; sending null for a NOT NULL
-        # column must be a 422, not a database IntegrityError.
         for name in ("title", "status", "priority"):
             if name in self.model_fields_set and getattr(self, name) is None:
                 raise ValueError(f"{name} must not be null")

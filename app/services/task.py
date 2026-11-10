@@ -11,9 +11,6 @@ from app.schemas.task import TaskCreate, TaskUpdate
 
 
 class TaskService:
-    """Authorization rule: resources the caller cannot see are 404 (existence is not
-    leaked); resources they can see but may not perform the action on are 403."""
-
     def __init__(self, repository: TaskRepository) -> None:
         self.repository = repository
 

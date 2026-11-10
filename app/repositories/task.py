@@ -24,7 +24,6 @@ class TaskRepository(BaseRepository[Task]):
         return (row[0], row[1]) if row else None
 
     async def workspace_role(self, workspace_id: int, user_id: int) -> WorkspaceRole | None:
-        """OWNER if user owns the workspace, else their membership role, else None."""
         owner_id = await self.session.scalar(
             select(Workspace.owner_id).where(Workspace.id == workspace_id)
         )
@@ -42,7 +41,6 @@ class TaskRepository(BaseRepository[Task]):
     async def list_visible(
         self, user: User, *, page: int, limit: int
     ) -> tuple[list[Task], int]:
-        """Tasks in workspaces the user owns or belongs to (ADMIN: every task)."""
         stmt = select(Task)
         if user.role != UserRole.ADMIN:
             member_of = select(WorkspaceMember.workspace_id).where(

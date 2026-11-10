@@ -1,5 +1,3 @@
-"""Shared dependencies: authentication (`CurrentUser`) and service wiring."""
-
 from typing import Annotated
 
 from fastapi import Depends
