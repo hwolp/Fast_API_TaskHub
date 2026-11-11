@@ -42,6 +42,8 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
             patcher = patch.object(settings, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        read_key.cache_clear()
+        self.addCleanup(read_key.cache_clear)
         url = "sqlite+aiosqlite:///" + (directory / "auth.db").as_posix()
         result = subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT,
@@ -56,7 +58,6 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
             async with self.sessions() as session:
                 try:
                     yield session
-                    await session.commit()
                 except Exception:
                     await session.rollback()
                     raise
