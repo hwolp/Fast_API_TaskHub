@@ -10,16 +10,6 @@ class CommentRepository(BaseRepository[Comment]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Comment, session)
 
-    async def get_task_with_workspace(self, task_id: int) -> tuple[Task, int] | None:
-        row = (
-            await self.session.execute(
-                select(Task, Project.workspace_id)
-                .join(Project, Task.project_id == Project.id)
-                .where(Task.id == task_id)
-            )
-        ).first()
-        return (row[0], row[1]) if row else None
-
     async def get_with_workspace(self, comment_id: int) -> tuple[Comment, int] | None:
         row = (
             await self.session.execute(
@@ -49,4 +39,3 @@ class CommentRepository(BaseRepository[Comment]):
         if task_id is not None:
             stmt = stmt.where(Comment.task_id == task_id)
         return await self._paginate(stmt, page=page, limit=limit)
-

@@ -1,44 +1,37 @@
-from fastapi import HTTPException
-
+from app.core import messages
+from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.permissions import (
     can_create_comment,
     can_delete_comment,
     can_modify_comment,
-    effective_role,
 )
-from app.core.security import forbidden
 from app.models import Comment, User
 from app.models.enums import WorkspaceRole
 from app.repositories.comment import CommentRepository
 from app.schemas.comment import CommentCreate, CommentUpdate
+from app.services.base import ScopedService
 
 
-class CommentService:
-    def __init__(self, repository: CommentRepository) -> None:
-        self.repository = repository
-
-    async def _role(self, workspace_id: int, user: User) -> WorkspaceRole | None:
-        return effective_role(
-            user, await self.repository.workspace_role(workspace_id, user.id)
-        )
-
+class CommentService(ScopedService[CommentRepository]):
     async def _load(
         self, comment_id: int, user: User
     ) -> tuple[Comment, WorkspaceRole]:
-        found = await self.repository.get_with_workspace(comment_id)
-        role = await self._role(found[1], user) if found else None
-        if found is None or role is None:
-            raise HTTPException(404, "comment_not_found")
-        return found[0], role
+        return await self.load_with_workspace(
+            comment_id, user, self.repository.get_with_workspace, messages.COMMENT_NOT_FOUND
+        )
 
     async def create_comment(self, data: CommentCreate, user: User) -> Comment:
         found = await self.repository.get_task_with_workspace(data.task_id)
-        role = await self._role(found[1], user) if found else None
+        role = (
+            await self.get_user_workspace_role(found[1], user) if found else None
+        )
         if found is None or role is None:
-            raise HTTPException(404, "task_not_found")
+            raise NotFoundError(messages.TASK_NOT_FOUND)
         if not can_create_comment(role):
-            raise forbidden()
-        return await self.repository.create(**data.model_dump(), author_id=user.id)
+            raise ForbiddenError(messages.FORBIDDEN)
+        comment = await self.repository.create(**data.model_dump(), author_id=user.id)
+        await self.session.commit()
+        return comment
 
     async def list_comments(
         self,
@@ -61,14 +54,16 @@ class CommentService:
     ) -> Comment:
         comment, role = await self._load(comment_id, user)
         if not can_modify_comment(role, comment, user):
-            raise forbidden()
-        return await self.repository.update(
+            raise ForbiddenError(messages.FORBIDDEN)
+        updated = await self.repository.update(
             comment, data.model_dump(exclude_unset=True)
         )
+        await self.session.commit()
+        return updated
 
     async def delete_comment(self, comment_id: int, user: User) -> None:
         comment, role = await self._load(comment_id, user)
         if not can_delete_comment(role, comment, user):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.delete(comment)
-
+        await self.session.commit()

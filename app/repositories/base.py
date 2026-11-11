@@ -38,20 +38,20 @@ class BaseRepository(Generic[ModelT]):
     async def create(self, **data: Any) -> ModelT:
         obj = self.model(**data)
         self.session.add(obj)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(obj)
         return obj
 
     async def update(self, obj: ModelT, data: dict[str, Any]) -> ModelT:
         for field, value in data.items():
             setattr(obj, field, value)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(obj)
         return obj
 
     async def delete(self, obj: ModelT) -> None:
         await self.session.delete(obj)
-        await self.session.commit()
+        await self.session.flush()
 
     async def workspace_role(self, workspace_id: int, user_id: int) -> WorkspaceRole | None:
         owner_id = await self.session.scalar(
@@ -75,3 +75,21 @@ class BaseRepository(Generic[ModelT]):
         return select(Workspace.id).where(
             or_(Workspace.owner_id == user_id, Workspace.id.in_(member_of))
         )
+
+    async def workspace_id_of_project(self, project_id: int) -> int | None:
+        from app.models.project import Project
+        return await self.session.scalar(
+            select(Project.workspace_id).where(Project.id == project_id)
+        )
+
+    async def get_task_with_workspace(self, task_id: int) -> tuple[Any, int] | None:
+        from app.models.project import Project
+        from app.models.task import Task
+        row = (
+            await self.session.execute(
+                select(Task, Project.workspace_id)
+                .join(Project, Task.project_id == Project.id)
+                .where(Task.id == task_id)
+            )
+        ).first()
+        return (row[0], row[1]) if row else None

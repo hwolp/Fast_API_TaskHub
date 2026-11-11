@@ -35,19 +35,15 @@ def can_create_task(role: WorkspaceRole) -> bool:
 
 
 def can_modify_task(role: WorkspaceRole, task: Task, user: User) -> bool:
-    if role == WorkspaceRole.OWNER:
-        return True
-    if role == WorkspaceRole.EDITOR:
-        return user.id in (task.created_by, task.assignee_id)
-    return False
+    return role == WorkspaceRole.OWNER or (
+        role == WorkspaceRole.EDITOR and user.id in (task.created_by, task.assignee_id)
+    )
 
 
 def can_delete_task(role: WorkspaceRole, task: Task, user: User) -> bool:
-    if role == WorkspaceRole.OWNER:
-        return True
-    if role == WorkspaceRole.EDITOR:
-        return task.created_by == user.id
-    return False
+    return role == WorkspaceRole.OWNER or (
+        role == WorkspaceRole.EDITOR and task.created_by == user.id
+    )
 
 
 def can_create_comment(role: WorkspaceRole) -> bool:
@@ -59,11 +55,9 @@ def can_modify_comment(role: WorkspaceRole, comment: Comment, user: User) -> boo
 
 
 def can_delete_comment(role: WorkspaceRole, comment: Comment, user: User) -> bool:
-    if role == WorkspaceRole.OWNER:
-        return True
-    if role == WorkspaceRole.EDITOR:
-        return comment.author_id == user.id
-    return False
+    return role == WorkspaceRole.OWNER or (
+        role == WorkspaceRole.EDITOR and comment.author_id == user.id
+    )
 
 
 def can_view_user(actor: User, target_id: int) -> bool:

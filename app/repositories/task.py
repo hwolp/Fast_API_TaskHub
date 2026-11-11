@@ -10,20 +10,8 @@ class TaskRepository(BaseRepository[Task]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Task, session)
 
-    async def workspace_id_of_project(self, project_id: int) -> int | None:
-        return await self.session.scalar(
-            select(Project.workspace_id).where(Project.id == project_id)
-        )
-
     async def get_with_workspace(self, task_id: int) -> tuple[Task, int] | None:
-        row = (
-            await self.session.execute(
-                select(Task, Project.workspace_id)
-                .join(Project, Task.project_id == Project.id)
-                .where(Task.id == task_id)
-            )
-        ).first()
-        return (row[0], row[1]) if row else None
+        return await self.get_task_with_workspace(task_id)
 
     async def list_visible(
         self,

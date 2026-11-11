@@ -1,48 +1,43 @@
-from fastapi import HTTPException
-
+from app.core import messages
+from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.core.permissions import (
     can_create_task,
     can_delete_task,
     can_modify_task,
-    effective_role,
 )
-from app.core.security import forbidden
 from app.models import Task, User
 from app.models.enums import WorkspaceRole
 from app.repositories.task import TaskRepository
 from app.schemas.task import TaskCreate, TaskUpdate
+from app.services.base import ScopedService
 
 
-class TaskService:
-    def __init__(self, repository: TaskRepository) -> None:
-        self.repository = repository
-
-    async def _role(self, workspace_id: int, user: User) -> WorkspaceRole | None:
-        return effective_role(
-            user, await self.repository.workspace_role(workspace_id, user.id)
-        )
-
+class TaskService(ScopedService[TaskRepository]):
     async def _load(self, task_id: int, user: User) -> tuple[Task, WorkspaceRole, int]:
-        found = await self.repository.get_with_workspace(task_id)
-        role = await self._role(found[1], user) if found else None
-        if found is None or role is None:
-            raise HTTPException(404, "task_not_found")
-        return found[0], role, found[1]
+        return await self.load_with_workspace(
+            task_id, user, self.repository.get_with_workspace, messages.TASK_NOT_FOUND
+        )
 
     async def _ensure_assignee(self, workspace_id: int, assignee_id: int) -> None:
         if await self.repository.workspace_role(workspace_id, assignee_id) is None:
-            raise HTTPException(400, "assignee_not_in_workspace")
+            raise BadRequestError(messages.ASSIGNEE_NOT_IN_WORKSPACE)
 
     async def create_task(self, data: TaskCreate, user: User) -> Task:
         workspace_id = await self.repository.workspace_id_of_project(data.project_id)
-        role = await self._role(workspace_id, user) if workspace_id is not None else None
+        role = (
+            await self.get_user_workspace_role(workspace_id, user)
+            if workspace_id is not None
+            else None
+        )
         if role is None:
-            raise HTTPException(404, "project_not_found")
+            raise NotFoundError(messages.PROJECT_NOT_FOUND)
         if not can_create_task(role):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         if data.assignee_id is not None:
             await self._ensure_assignee(workspace_id, data.assignee_id)
-        return await self.repository.create(**data.model_dump(), created_by=user.id)
+        task = await self.repository.create(**data.model_dump(), created_by=user.id)
+        await self.session.commit()
+        return task
 
     async def list_tasks(
         self,
@@ -63,14 +58,17 @@ class TaskService:
     async def update_task(self, task_id: int, data: TaskUpdate, user: User) -> Task:
         task, role, workspace_id = await self._load(task_id, user)
         if not can_modify_task(role, task, user):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         changes = data.model_dump(exclude_unset=True)
         if changes.get("assignee_id") is not None:
             await self._ensure_assignee(workspace_id, changes["assignee_id"])
-        return await self.repository.update(task, changes)
+        updated = await self.repository.update(task, changes)
+        await self.session.commit()
+        return updated
 
     async def delete_task(self, task_id: int, user: User) -> None:
         task, role, _ = await self._load(task_id, user)
         if not can_delete_task(role, task, user):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.delete(task)
+        await self.session.commit()

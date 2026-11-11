@@ -1,48 +1,42 @@
-from fastapi import HTTPException
-
-from app.core.permissions import (
-    can_manage_label,
-    can_modify_task,
-    effective_role,
+from app.core import messages
+from app.core.exceptions import (
+    BadRequestError,
+    ForbiddenError,
+    NotFoundError,
 )
-from app.core.security import forbidden
+from app.core.permissions import can_manage_label, can_modify_task
 from app.models import Label, Task, User
 from app.models.enums import WorkspaceRole
 from app.repositories.label import LabelRepository
 from app.schemas.label import LabelCreate, LabelUpdate
+from app.services.base import ScopedService
 
 
-class LabelService:
-    def __init__(self, repository: LabelRepository) -> None:
-        self.repository = repository
-
-    async def _role(self, workspace_id: int, user: User) -> WorkspaceRole | None:
-        return effective_role(
-            user, await self.repository.workspace_role(workspace_id, user.id)
+class LabelService(ScopedService[LabelRepository]):
+    async def _load(self, label_id: int, user: User) -> tuple[Label, WorkspaceRole]:
+        return await self.load_with_workspace(
+            label_id, user, self.repository.get_with_workspace, messages.LABEL_NOT_FOUND
         )
 
-    async def _load(self, label_id: int, user: User) -> tuple[Label, WorkspaceRole]:
-        found = await self.repository.get_with_workspace(label_id)
-        role = await self._role(found[1], user) if found else None
-        if found is None or role is None:
-            raise HTTPException(404, "label_not_found")
-        return found[0], role
-
     async def _load_task(self, task_id: int, user: User) -> tuple[Task, WorkspaceRole]:
-        found = await self.repository.get_task_with_workspace(task_id)
-        role = await self._role(found[1], user) if found else None
-        if found is None or role is None:
-            raise HTTPException(404, "task_not_found")
-        return found[0], role
+        return await self.load_with_workspace(
+            task_id, user, self.repository.get_task_with_workspace, messages.TASK_NOT_FOUND
+        )
 
     async def create_label(self, data: LabelCreate, user: User) -> Label:
         workspace_id = await self.repository.workspace_id_of_project(data.project_id)
-        role = await self._role(workspace_id, user) if workspace_id is not None else None
+        role = (
+            await self.get_user_workspace_role(workspace_id, user)
+            if workspace_id is not None
+            else None
+        )
         if role is None:
-            raise HTTPException(404, "project_not_found")
+            raise NotFoundError(messages.PROJECT_NOT_FOUND)
         if not can_manage_label(role):
-            raise forbidden()
-        return await self.repository.create(**data.model_dump())
+            raise ForbiddenError(messages.FORBIDDEN)
+        label = await self.repository.create(**data.model_dump())
+        await self.session.commit()
+        return label
 
     async def list_labels(
         self,
@@ -65,16 +59,19 @@ class LabelService:
     ) -> Label:
         label, role = await self._load(label_id, user)
         if not can_manage_label(role):
-            raise forbidden()
-        return await self.repository.update(
+            raise ForbiddenError(messages.FORBIDDEN)
+        updated = await self.repository.update(
             label, data.model_dump(exclude_unset=True)
         )
+        await self.session.commit()
+        return updated
 
     async def delete_label(self, label_id: int, user: User) -> None:
         label, role = await self._load(label_id, user)
         if not can_manage_label(role):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.delete(label)
+        await self.session.commit()
 
     async def attach_label_to_task(
         self, task_id: int, label_id: int, user: User
@@ -82,10 +79,11 @@ class LabelService:
         task, role = await self._load_task(task_id, user)
         label, _ = await self._load(label_id, user)
         if not can_modify_task(role, task, user):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         if label.project_id != task.project_id:
-            raise HTTPException(400, "label_project_mismatch")
+            raise BadRequestError(messages.LABEL_PROJECT_MISMATCH)
         await self.repository.attach_to_task(task_id, label_id)
+        await self.session.commit()
 
     async def detach_label_from_task(
         self, task_id: int, label_id: int, user: User
@@ -93,6 +91,6 @@ class LabelService:
         task, role = await self._load_task(task_id, user)
         await self._load(label_id, user)
         if not can_modify_task(role, task, user):
-            raise forbidden()
+            raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.detach_from_task(task_id, label_id)
-
+        await self.session.commit()

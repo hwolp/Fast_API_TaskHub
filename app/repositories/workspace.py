@@ -1,4 +1,6 @@
+from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import User, Workspace, WorkspaceMember
@@ -21,7 +23,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
                 role=WorkspaceRole.OWNER,
             )
         )
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(workspace)
         return workspace
 
@@ -54,7 +56,11 @@ class WorkspaceRepository(BaseRepository[Workspace]):
     ) -> WorkspaceMember:
         member = WorkspaceMember(workspace_id=workspace_id, user_id=user_id, role=role)
         self.session.add(member)
-        await self.session.commit()
+        try:
+            await self.session.flush()
+        except IntegrityError:
+            await self.session.rollback()
+            raise HTTPException(409, "member_already_exists") from None
         await self.session.refresh(member)
         return member
 
@@ -62,11 +68,10 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         self, member: WorkspaceMember, role: WorkspaceRole
     ) -> WorkspaceMember:
         member.role = role
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(member)
         return member
 
     async def remove_member(self, member: WorkspaceMember) -> None:
         await self.session.delete(member)
-        await self.session.commit()
-
+        await self.session.flush()

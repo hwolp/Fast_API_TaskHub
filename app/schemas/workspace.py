@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import WorkspaceRole
 
@@ -32,9 +32,23 @@ class WorkspaceMemberAdd(BaseModel):
     user_id: int = Field(..., description="ID người dùng được thêm vào workspace")
     role: WorkspaceRole = Field(default=WorkspaceRole.VIEWER, description="Vai trò trong workspace")
 
+    @field_validator("role")
+    @classmethod
+    def validate_assignable_role(cls, value: WorkspaceRole) -> WorkspaceRole:
+        if value == WorkspaceRole.OWNER:
+            raise ValueError("cannot assign OWNER role to workspace member")
+        return value
+
 
 class WorkspaceMemberUpdate(BaseModel):
     role: WorkspaceRole = Field(..., description="Vai trò mới trong workspace")
+
+    @field_validator("role")
+    @classmethod
+    def validate_assignable_role(cls, value: WorkspaceRole) -> WorkspaceRole:
+        if value == WorkspaceRole.OWNER:
+            raise ValueError("cannot assign OWNER role to workspace member")
+        return value
 
 
 class WorkspaceMemberResponse(BaseModel):

@@ -1,13 +1,13 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import CurrentUser, get_task_service
+from app.schemas.pagination import PaginatedResponse
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from app.services.task import TaskService
 
 router = APIRouter()
-
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 
 
@@ -16,17 +16,15 @@ async def create_task(data: TaskCreate, user: CurrentUser, service: TaskServiceD
     return await service.create_task(data, user)
 
 
-@router.get("/", response_model=list[TaskResponse])
+@router.get("/", response_model=PaginatedResponse[TaskResponse])
 async def list_tasks(
     user: CurrentUser,
     service: TaskServiceDep,
-    response: Response,
     page: Annotated[int, Query(ge=1)] = 1,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    tasks, total = await service.list_tasks(user, page=page, limit=limit)
-    response.headers["X-Total-Count"] = str(total)
-    return tasks
+    items, total = await service.list_tasks(user, page=page, limit=limit)
+    return PaginatedResponse(items=items, total=total)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
