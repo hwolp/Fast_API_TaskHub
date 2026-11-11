@@ -1,47 +1,44 @@
-from datetime import datetime
-from typing import Any
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Project, Task, User
+from app.models.enums import UserRole
+from app.repositories.base import BaseRepository
 
 
-class TaskRepository:
-    def __init__(self) -> None:
-        self._tasks: dict[int, dict[str, Any]] = {}
-        self._id_counter = 1
+class TaskRepository(BaseRepository[Task]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(Task, session)
 
-    def create(self, data: dict[str, Any]) -> dict[str, Any]:
-        task_id = self._id_counter
-        self._id_counter += 1
-        now = datetime.now()
-        task = {
-            "id": task_id,
-            **data,
-            "created_at": data.get("created_at") or now,
-        }
-        self._tasks[task_id] = task
-        return task
+    async def workspace_id_of_project(self, project_id: int) -> int | None:
+        return await self.session.scalar(
+            select(Project.workspace_id).where(Project.id == project_id)
+        )
 
-    def get_all(self) -> list[dict[str, Any]]:
-        return list(self._tasks.values())
+    async def get_with_workspace(self, task_id: int) -> tuple[Task, int] | None:
+        row = (
+            await self.session.execute(
+                select(Task, Project.workspace_id)
+                .join(Project, Task.project_id == Project.id)
+                .where(Task.id == task_id)
+            )
+        ).first()
+        return (row[0], row[1]) if row else None
 
-    def get_by_id(self, task_id: int) -> dict[str, Any] | None:
-        return self._tasks.get(task_id)
-
-    def update(self, task_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
-        task = self._tasks.get(task_id)
-        if not task:
-            return None
-        task.update(data)
-        self._tasks[task_id] = task
-        return task
-
-    def delete(self, task_id: int) -> bool:
-        if task_id in self._tasks:
-            del self._tasks[task_id]
-            return True
-        return False
-
-
-_task_repository = TaskRepository()
-
-
-def get_task_repository() -> TaskRepository:
-    return _task_repository
+    async def list_visible(
+        self,
+        user: User,
+        *,
+        project_id: int | None = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[list[Task], int]:
+        stmt = select(Task)
+        if user.role != UserRole.ADMIN:
+            visible_projects = select(Project.id).where(
+                Project.workspace_id.in_(self.visible_workspace_ids(user.id))
+            )
+            stmt = stmt.where(Task.project_id.in_(visible_projects))
+        if project_id is not None:
+            stmt = stmt.where(Task.project_id == project_id)
+        return await self._paginate(stmt, page=page, limit=limit)

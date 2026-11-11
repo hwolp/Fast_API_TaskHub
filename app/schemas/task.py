@@ -1,20 +1,8 @@
 from datetime import datetime
-from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-class TaskStatus(str, Enum):
-    TODO = "TODO"
-    IN_PROGRESS = "IN_PROGRESS"
-    IN_REVIEW = "IN_REVIEW"
-    DONE = "DONE"
-
-
-class TaskPriority(str, Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    URGENT = "URGENT"
+from app.models.enums import TaskPriority, TaskStatus
 
 
 class TaskBase(BaseModel):
@@ -22,12 +10,11 @@ class TaskBase(BaseModel):
     status: TaskStatus = Field(default=TaskStatus.TODO, description="Trạng thái task")
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="Mức độ ưu tiên")
     due_date: datetime | None = Field(default=None, description="Hạn chót hoàn thành")
-    project_id: int | None = Field(default=None, description="ID dự án liên kết")
     assignee_id: int | None = Field(default=None, description="ID người được phân công")
 
 
 class TaskCreate(TaskBase):
-    created_by: int | None = Field(default=None, description="ID người tạo task")
+    project_id: int = Field(..., description="ID dự án chứa task")
 
 
 class TaskUpdate(BaseModel):
@@ -35,13 +22,20 @@ class TaskUpdate(BaseModel):
     status: TaskStatus | None = Field(default=None, description="Trạng thái task")
     priority: TaskPriority | None = Field(default=None, description="Mức độ ưu tiên")
     due_date: datetime | None = Field(default=None, description="Hạn chót hoàn thành")
-    project_id: int | None = Field(default=None, description="ID dự án liên kết")
     assignee_id: int | None = Field(default=None, description="ID người được phân công")
+
+    @model_validator(mode="after")
+    def reject_null_for_required_columns(self) -> "TaskUpdate":
+        for name in ("title", "status", "priority"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} must not be null")
+        return self
 
 
 class TaskResponse(TaskBase):
     id: int
-    created_by: int | None = None
+    project_id: int
+    created_by: int
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
