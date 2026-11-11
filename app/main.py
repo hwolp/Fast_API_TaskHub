@@ -1,16 +1,17 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from app.core.config import settings
+
+from app.api.v1.endpoints.auth import jwks_router
 from app.api.v1.router import api_router
+from app.core.config import settings
+from app.core.security import load_keys
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup event
-    print(f"Starting up {settings.PROJECT_NAME}...")
+    load_keys()
     yield
-    # Shutdown event
-    print(f"Shutting down {settings.PROJECT_NAME}...")
 
 
 app = FastAPI(
@@ -21,6 +22,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(jwks_router)
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 

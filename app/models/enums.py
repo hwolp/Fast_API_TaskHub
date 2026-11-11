@@ -1,6 +1,11 @@
 from enum import Enum
 
 
+class TokenType(str, Enum):
+    ACCESS = "access"
+    REFRESH = "refresh"
+
+
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
     MEMBER = "MEMBER"
@@ -29,4 +34,3 @@ class TaskPriority(str, Enum):
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     URGENT = "URGENT"
-
