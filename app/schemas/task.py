@@ -15,7 +15,6 @@ class TaskBase(BaseModel):
 
 class TaskCreate(TaskBase):
     project_id: int = Field(..., description="ID dự án chứa task")
-    created_by: int = Field(..., description="ID người tạo task")
 
 
 class TaskUpdate(BaseModel):

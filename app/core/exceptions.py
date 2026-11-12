@@ -40,3 +40,4 @@ class NotFoundError(AppException):
 class ConflictError(AppException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "conflict"
+

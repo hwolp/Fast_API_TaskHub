@@ -44,3 +44,6 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise UnauthorizedError(messages.TOKEN_INVALID)
     return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]

@@ -8,3 +8,4 @@ ItemT = TypeVar("ItemT")
 class PaginatedResponse(BaseModel, Generic[ItemT]):
     items: list[ItemT]
     total: int
+
