@@ -7,6 +7,7 @@ from app.models.enums import TaskPriority, TaskStatus
 
 class TaskBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Tiêu đề task")
+    description: str | None = Field(default=None, description="Mô tả task")
     status: TaskStatus = Field(default=TaskStatus.TODO, description="Trạng thái task")
     priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="Mức độ ưu tiên")
     due_date: datetime | None = Field(default=None, description="Hạn chót hoàn thành")
@@ -19,6 +20,7 @@ class TaskCreate(TaskBase):
 
 class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255, description="Tiêu đề task")
+    description: str | None = Field(default=None, description="Mô tả task")
     status: TaskStatus | None = Field(default=None, description="Trạng thái task")
     priority: TaskPriority | None = Field(default=None, description="Mức độ ưu tiên")
     due_date: datetime | None = Field(default=None, description="Hạn chót hoàn thành")
