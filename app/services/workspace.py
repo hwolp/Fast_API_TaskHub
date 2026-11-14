@@ -124,5 +124,8 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         member = await self.repository.get_member(workspace_id, member_user_id)
         if member is None:
             raise NotFoundError(messages.MEMBER_NOT_FOUND)
+        await self.repository.unassign_workspace_member_tasks(
+            workspace_id, member_user_id
+        )
         await self.repository.remove_member(member)
         await self.session.commit()

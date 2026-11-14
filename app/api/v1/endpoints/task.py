@@ -20,10 +20,13 @@ async def create_task(data: TaskCreate, user: CurrentUser, service: TaskServiceD
 async def list_tasks(
     user: CurrentUser,
     service: TaskServiceDep,
+    project_id: Annotated[int | None, Query(description="Lọc theo ID dự án")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    items, total = await service.list_tasks(user, page=page, limit=limit)
+    items, total = await service.list_tasks(
+        user, project_id=project_id, page=page, limit=limit
+    )
     return PaginatedResponse(items=items, total=total)
 
 
