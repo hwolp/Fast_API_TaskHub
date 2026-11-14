@@ -82,6 +82,37 @@ class BaseRepository(Generic[ModelT]):
             select(Project.workspace_id).where(Project.id == project_id)
         )
 
+    async def get_project_workspace_and_status(
+        self, project_id: int
+    ) -> tuple[int, Any] | None:
+        from app.models.project import Project
+        row = (
+            await self.session.execute(
+                select(Project.workspace_id, Project.status).where(
+                    Project.id == project_id
+                )
+            )
+        ).first()
+        return (row[0], row[1]) if row else None
+
+    async def is_user_active(self, user_id: int) -> bool:
+        from app.models.user import User
+        is_active = await self.session.scalar(
+            select(User.is_active).where(User.id == user_id)
+        )
+        return bool(is_active)
+
+    async def is_task_project_archived(self, task_id: int) -> bool:
+        from app.models.enums import ProjectStatus
+        from app.models.project import Project
+        from app.models.task import Task
+        status = await self.session.scalar(
+            select(Project.status)
+            .join(Task, Task.project_id == Project.id)
+            .where(Task.id == task_id)
+        )
+        return status == ProjectStatus.ARCHIVED
+
     async def get_task_with_workspace(self, task_id: int) -> tuple[Any, int] | None:
         from app.models.project import Project
         from app.models.task import Task

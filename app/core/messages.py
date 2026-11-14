@@ -16,6 +16,7 @@ CANNOT_MODIFY_OWN_ADMIN_STATUS = "cannot_modify_own_admin_status"
 CANNOT_DELETE_USER_WITH_DEPENDENCIES = "cannot_delete_user_with_dependencies"
 
 PROJECT_NOT_FOUND = "project_not_found"
+PROJECT_ARCHIVED = "project_archived"
 TASK_NOT_FOUND = "task_not_found"
 LABEL_NOT_FOUND = "label_not_found"
 COMMENT_NOT_FOUND = "comment_not_found"

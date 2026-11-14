@@ -21,7 +21,7 @@ from app.core.database import get_db
 from app.core.security import create_token, read_key
 from app.main import app
 from app.models import Project, User, Workspace, WorkspaceMember
-from app.models.enums import TokenType, UserRole, WorkspaceRole
+from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
 
 ROOT = Path(__file__).resolve().parents[1]
 API = "/api/v1/tasks/"
@@ -104,6 +104,7 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             p2 = Project(workspace_id=ws2.id, name="p2")
             session.add_all([p1, p2])
             await session.flush()
+            self.ws1 = ws1.id
             self.p1, self.p2 = p1.id, p2.id
             await session.commit()
 
@@ -187,9 +188,12 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         bad_patch = await self.call(
             "PATCH", f"{API}{task['id']}", "alice", json={"assignee_id": self.uid["dave"]})
         self.assertEqual(bad_patch.status_code, 400)
-        good = await self.call(
+        bad_viewer = await self.call(
             "PATCH", f"{API}{task['id']}", "alice", json={"assignee_id": self.uid["carol"]})
-        self.assertEqual((good.status_code, good.json()["assignee_id"]), (200, self.uid["carol"]))
+        self.assertEqual((bad_viewer.status_code, bad_viewer.json()["detail"]), (400, "assignee_not_in_workspace"))
+        good = await self.call(
+            "PATCH", f"{API}{task['id']}", "alice", json={"assignee_id": self.uid["bob"]})
+        self.assertEqual((good.status_code, good.json()["assignee_id"]), (200, self.uid["bob"]))
 
     async def test_list_is_scoped_to_visible_workspaces_and_paginated(self):
         for _ in range(3):
@@ -226,6 +230,63 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             await session.execute(update(User).where(User.id == self.uid["bob"]).values(is_active=False))
             await session.commit()
         self.assertEqual((await self.call("GET", API, "bob")).status_code, 401)
+
+    async def test_task_description_and_filtering_by_project(self):
+        task = await self.make_task("alice", description="Detailed description")
+        self.assertEqual(task["description"], "Detailed description")
+        patch_res = await self.call(
+            "PATCH", f"{API}{task['id']}", "alice", json={"description": "Updated description"}
+        )
+        self.assertEqual(patch_res.status_code, 200)
+        self.assertEqual(patch_res.json()["description"], "Updated description")
+
+        res_p1 = await self.call("GET", f"{API}?project_id={self.p1}", "alice")
+        self.assertEqual(res_p1.status_code, 200)
+        self.assertTrue(all(t["project_id"] == self.p1 for t in res_p1.json()["items"]))
+
+        res_p2 = await self.call("GET", f"{API}?project_id={self.p2}", "alice")
+        self.assertEqual(res_p2.status_code, 200)
+        self.assertEqual(res_p2.json()["total"], 0)
+
+    async def test_cannot_create_or_modify_task_in_archived_project(self):
+        task = await self.make_task("alice")
+        from sqlalchemy import update
+        async with self.sessions() as session:
+            await session.execute(
+                update(Project).where(Project.id == self.p1).values(status=ProjectStatus.ARCHIVED)
+            )
+            await session.commit()
+        res = await self.call("POST", API, "alice", json={"title": "archived task", "project_id": self.p1})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["detail"], "project_archived")
+        patch_res = await self.call("PATCH", f"{API}{task['id']}", "alice", json={"title": "new title"})
+        self.assertEqual(patch_res.status_code, 400)
+        self.assertEqual(patch_res.json()["detail"], "project_archived")
+
+    async def test_assignee_cannot_be_inactive_user(self):
+        from sqlalchemy import update
+        async with self.sessions() as session:
+            await session.execute(
+                update(User).where(User.id == self.uid["bob"]).values(is_active=False)
+            )
+            await session.commit()
+        res = await self.call("POST", API, "alice", json={
+            "title": "task for inactive", "project_id": self.p1, "assignee_id": self.uid["bob"]
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["detail"], "assignee_not_in_workspace")
+
+    async def test_unassign_tasks_when_member_removed_from_workspace(self):
+        task = await self.make_task("alice", assignee_id=self.uid["erin"])
+        self.assertEqual(task["assignee_id"], self.uid["erin"])
+        ws_api = "/api/v1/workspaces/"
+        del_res = await self.call(
+            "DELETE", f"{ws_api}{self.ws1}/members/{self.uid['erin']}", "alice"
+        )
+        self.assertEqual(del_res.status_code, 204)
+        get_res = await self.call("GET", f"{API}{task['id']}", "alice")
+        self.assertEqual(get_res.status_code, 200)
+        self.assertIsNone(get_res.json()["assignee_id"])
 
 
 if __name__ == "__main__":

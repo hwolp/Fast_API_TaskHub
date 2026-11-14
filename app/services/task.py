@@ -1,12 +1,13 @@
 from app.core import messages
 from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.core.permissions import (
+    WRITE_ROLES,
     can_create_task,
     can_delete_task,
     can_modify_task,
 )
 from app.models import Task, User
-from app.models.enums import WorkspaceRole
+from app.models.enums import ProjectStatus, WorkspaceRole
 from app.repositories.task import TaskRepository
 from app.schemas.task import TaskCreate, TaskUpdate
 from app.services.base import ScopedService
@@ -19,18 +20,22 @@ class TaskService(ScopedService[TaskRepository]):
         )
 
     async def _ensure_assignee(self, workspace_id: int, assignee_id: int) -> None:
-        if await self.repository.workspace_role(workspace_id, assignee_id) is None:
+        role = await self.repository.workspace_role(workspace_id, assignee_id)
+        if role is None or role not in WRITE_ROLES:
+            raise BadRequestError(messages.ASSIGNEE_NOT_IN_WORKSPACE)
+        if not await self.repository.is_user_active(assignee_id):
             raise BadRequestError(messages.ASSIGNEE_NOT_IN_WORKSPACE)
 
     async def create_task(self, data: TaskCreate, user: User) -> Task:
-        workspace_id = await self.repository.workspace_id_of_project(data.project_id)
-        role = (
-            await self.get_user_workspace_role(workspace_id, user)
-            if workspace_id is not None
-            else None
-        )
+        proj_info = await self.repository.get_project_workspace_and_status(data.project_id)
+        if proj_info is None:
+            raise NotFoundError(messages.PROJECT_NOT_FOUND)
+        workspace_id, project_status = proj_info
+        role = await self.get_user_workspace_role(workspace_id, user)
         if role is None:
             raise NotFoundError(messages.PROJECT_NOT_FOUND)
+        if project_status == ProjectStatus.ARCHIVED:
+            raise BadRequestError(messages.PROJECT_ARCHIVED)
         if not can_create_task(role):
             raise ForbiddenError(messages.FORBIDDEN)
         if data.assignee_id is not None:
@@ -59,6 +64,8 @@ class TaskService(ScopedService[TaskRepository]):
         task, role, workspace_id = await self._load(task_id, user)
         if not can_modify_task(role, task, user):
             raise ForbiddenError(messages.FORBIDDEN)
+        if await self.repository.is_task_project_archived(task_id):
+            raise BadRequestError(messages.PROJECT_ARCHIVED)
         changes = data.model_dump(exclude_unset=True)
         if changes.get("assignee_id") is not None:
             await self._ensure_assignee(workspace_id, changes["assignee_id"])

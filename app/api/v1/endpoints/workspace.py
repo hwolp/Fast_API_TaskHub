@@ -107,3 +107,4 @@ async def remove_member(
     service: WorkspaceServiceDep,
 ):
     await service.remove_member(workspace_id, member_user_id, user)
+

@@ -72,6 +72,28 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         await self.session.refresh(member)
         return member
 
+    async def unassign_workspace_member_tasks(
+        self, workspace_id: int, user_id: int
+    ) -> None:
+        from sqlalchemy import update
+
+        from app.models.project import Project
+        from app.models.task import Task
+
+        project_ids = (
+            select(Project.id).where(Project.workspace_id == workspace_id).scalar_subquery()
+        )
+        stmt = (
+            update(Task)
+            .where(
+                Task.project_id.in_(project_ids),
+                Task.assignee_id == user_id,
+            )
+            .values(assignee_id=None)
+        )
+        await self.session.execute(stmt)
+        await self.session.flush()
+
     async def remove_member(self, member: WorkspaceMember) -> None:
         await self.session.delete(member)
         await self.session.flush()
