@@ -1,10 +1,10 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import messages
 from app.core.exceptions import ConflictError
-from app.models import User, Workspace, WorkspaceMember
+from app.models import Project, Task, User, Workspace, WorkspaceMember
 from app.models.enums import UserRole, WorkspaceRole
 from app.repositories.base import BaseRepository
 
@@ -72,6 +72,24 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         await self.session.flush()
         await self.session.refresh(member)
         return member
+
+    async def unassign_workspace_member_tasks(
+        self, workspace_id: int, user_id: int
+    ) -> None:
+        project_ids = (
+            select(Project.id)
+            .where(Project.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        stmt = (
+            update(Task)
+            .where(
+                Task.project_id.in_(project_ids),
+                Task.assignee_id == user_id,
+            )
+            .values(assignee_id=None)
+        )
+        await self.session.execute(stmt)
 
     async def remove_member(self, member: WorkspaceMember) -> None:
         await self.session.delete(member)

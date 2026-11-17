@@ -4,7 +4,9 @@ from sqlalchemy import Select, func, inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import Base
-from app.models.enums import WorkspaceRole
+from app.models.enums import ProjectStatus, WorkspaceRole
+from app.models.project import Project
+from app.models.task import Task
 from app.models.workspace import Workspace, WorkspaceMember
 
 ModelT = TypeVar("ModelT", bound=Base)
@@ -21,7 +23,9 @@ class BaseRepository(Generic[ModelT]):
     async def _paginate(
         self, stmt: Select[tuple[ModelT]], *, page: int = 1, limit: int = 20
     ) -> tuple[list[ModelT], int]:
-        total = await self.session.scalar(select(func.count()).select_from(stmt.subquery()))
+        total = await self.session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        )
         ordered = (
             stmt.order_by(*inspect(self.model).primary_key)
             .offset((page - 1) * limit)
@@ -53,7 +57,9 @@ class BaseRepository(Generic[ModelT]):
         await self.session.delete(obj)
         await self.session.flush()
 
-    async def workspace_role(self, workspace_id: int, user_id: int) -> WorkspaceRole | None:
+    async def workspace_role(
+        self, workspace_id: int, user_id: int
+    ) -> WorkspaceRole | None:
         owner_id = await self.session.scalar(
             select(Workspace.owner_id).where(Workspace.id == workspace_id)
         )
@@ -76,20 +82,26 @@ class BaseRepository(Generic[ModelT]):
             or_(Workspace.owner_id == user_id, Workspace.id.in_(member_of))
         )
 
-    async def workspace_id_of_project(self, project_id: int) -> int | None:
-        from app.models.project import Project
-        return await self.session.scalar(
-            select(Project.workspace_id).where(Project.id == project_id)
-        )
-
-    async def get_task_with_workspace(self, task_id: int) -> tuple[Any, int] | None:
-        from app.models.project import Project
-        from app.models.task import Task
+    async def workspace_id_of_project(
+        self, project_id: int
+    ) -> tuple[int, ProjectStatus] | None:
         row = (
             await self.session.execute(
-                select(Task, Project.workspace_id)
+                select(Project.workspace_id, Project.status).where(
+                    Project.id == project_id
+                )
+            )
+        ).first()
+        return (row[0], row[1]) if row else None
+
+    async def get_task_with_workspace(
+        self, task_id: int
+    ) -> tuple[Task, int, ProjectStatus] | None:
+        row = (
+            await self.session.execute(
+                select(Task, Project.workspace_id, Project.status)
                 .join(Project, Task.project_id == Project.id)
                 .where(Task.id == task_id)
             )
         ).first()
-        return (row[0], row[1]) if row else None
+        return (row[0], row[1], row[2]) if row else None

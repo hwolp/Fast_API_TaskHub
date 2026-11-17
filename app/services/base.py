@@ -26,12 +26,11 @@ class ScopedService(Generic[RepoT]):
         user: User,
         loader,
         not_found_message: str,
-    ) -> tuple[Any, WorkspaceRole, int]:
+    ) -> tuple[Any, ...]:
         found = await loader(entity_id)
         role = (
             await self.get_user_workspace_role(found[1], user) if found else None
         )
         if found is None or role is None:
             raise NotFoundError(not_found_message)
-        return found[0], role, found[1]
-
+        return (found[0], role, *found[1:])

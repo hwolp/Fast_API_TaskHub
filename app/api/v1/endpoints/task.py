@@ -3,42 +3,86 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import CurrentUser, get_task_service
-from app.schemas.pagination import PaginatedResponse
+from app.schemas.pagination import PaginatedResponse, PaginationDep
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from app.services.task import TaskService
 
 router = APIRouter()
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 
+BAD_REQUEST_RESPONSE = {
+    400: {"description": "Invalid assignee or archived project"}
+}
+FORBIDDEN_RESPONSE = {403: {"description": "Forbidden"}}
+NOT_FOUND_RESPONSE = {404: {"description": "Task or project not found"}}
 
-@router.post("/", response_model=TaskResponse, status_code=201)
-async def create_task(data: TaskCreate, user: CurrentUser, service: TaskServiceDep):
+
+@router.post(
+    "/",
+    response_model=TaskResponse,
+    status_code=201,
+    summary="Create a new task in a project",
+    responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
+)
+async def create_task(
+    data: TaskCreate, user: CurrentUser, service: TaskServiceDep
+) -> TaskResponse:
     return await service.create_task(data, user)
 
 
-@router.get("/", response_model=PaginatedResponse[TaskResponse])
+@router.get(
+    "/",
+    response_model=PaginatedResponse[TaskResponse],
+    summary="List visible tasks with pagination",
+)
 async def list_tasks(
     user: CurrentUser,
     service: TaskServiceDep,
-    page: Annotated[int, Query(ge=1)] = 1,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-):
-    items, total = await service.list_tasks(user, page=page, limit=limit)
+    pagination: PaginationDep,
+    project_id: Annotated[
+        int | None, Query(ge=1, description="Lọc theo ID dự án")
+    ] = None,
+) -> PaginatedResponse[TaskResponse]:
+    items, total = await service.list_tasks(
+        user,
+        project_id=project_id,
+        page=pagination.page,
+        limit=pagination.limit,
+    )
     return PaginatedResponse(items=items, total=total)
 
 
-@router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: int, user: CurrentUser, service: TaskServiceDep):
+@router.get(
+    "/{task_id}",
+    response_model=TaskResponse,
+    summary="Get task details by ID",
+    responses=NOT_FOUND_RESPONSE,
+)
+async def get_task(
+    task_id: int, user: CurrentUser, service: TaskServiceDep
+) -> TaskResponse:
     return await service.get_task(task_id, user)
 
 
-@router.patch("/{task_id}", response_model=TaskResponse)
+@router.patch(
+    "/{task_id}",
+    response_model=TaskResponse,
+    summary="Update task fields or assignee",
+    responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
+)
 async def update_task(
     task_id: int, data: TaskUpdate, user: CurrentUser, service: TaskServiceDep
-):
+) -> TaskResponse:
     return await service.update_task(task_id, data, user)
 
 
-@router.delete("/{task_id}", status_code=204)
-async def delete_task(task_id: int, user: CurrentUser, service: TaskServiceDep):
+@router.delete(
+    "/{task_id}",
+    status_code=204,
+    summary="Delete a task by ID",
+    responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
+)
+async def delete_task(
+    task_id: int, user: CurrentUser, service: TaskServiceDep
+) -> None:
     await service.delete_task(task_id, user)

@@ -28,4 +28,3 @@ PaginationDep = Annotated[PaginationParams, Depends(get_pagination)]
 class PaginatedResponse(BaseModel, Generic[ItemT]):
     items: list[ItemT]
     total: int
-

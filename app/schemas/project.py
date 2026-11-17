@@ -6,10 +6,9 @@ from app.models.enums import ProjectStatus
 
 
 class ProjectCreate(BaseModel):
-    workspace_id: int = Field(..., description="ID workspace chứa dự án")
+    workspace_id: int = Field(..., ge=1, description="ID workspace chứa dự án")
     name: str = Field(..., min_length=1, max_length=100, description="Tên dự án")
     description: str | None = Field(default=None, description="Mô tả dự án")
-    status: ProjectStatus = Field(default=ProjectStatus.ACTIVE, description="Trạng thái dự án")
 
 
 class ProjectUpdate(BaseModel):
@@ -34,4 +33,3 @@ class ProjectResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-
