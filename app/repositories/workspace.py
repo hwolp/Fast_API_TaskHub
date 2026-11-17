@@ -1,8 +1,9 @@
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import messages
+from app.core.exceptions import ConflictError
 from app.models import User, Workspace, WorkspaceMember
 from app.models.enums import UserRole, WorkspaceRole
 from app.repositories.base import BaseRepository
@@ -60,7 +61,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
             await self.session.flush()
         except IntegrityError:
             await self.session.rollback()
-            raise HTTPException(409, "member_already_exists") from None
+            raise ConflictError(messages.MEMBER_ALREADY_EXISTS) from None
         await self.session.refresh(member)
         return member
 
