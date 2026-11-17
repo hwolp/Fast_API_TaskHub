@@ -11,10 +11,14 @@ from app.core.security import decode_token
 from app.models import User
 from app.models.enums import TokenType
 from app.repositories.auth import AuthRepository
+from app.repositories.comment import CommentRepository
+from app.repositories.label import LabelRepository
 from app.repositories.project import ProjectRepository
 from app.repositories.task import TaskRepository
 from app.repositories.workspace import WorkspaceRepository
 from app.services.auth import AuthService
+from app.services.comment import CommentService
+from app.services.label import LabelService
 from app.services.project import ProjectService
 from app.services.task import TaskService
 from app.services.workspace import WorkspaceService
@@ -43,6 +47,14 @@ def get_workspace_service(session: SessionDep) -> WorkspaceService:
 
 def get_project_service(session: SessionDep) -> ProjectService:
     return ProjectService(ProjectRepository(session))
+
+
+def get_label_service(session: SessionDep) -> LabelService:
+    return LabelService(LabelRepository(session))
+
+
+def get_comment_service(session: SessionDep) -> CommentService:
+    return CommentService(CommentRepository(session))
 
 
 async def get_current_user(
