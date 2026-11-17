@@ -4,7 +4,9 @@ from sqlalchemy import Select, func, inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import Base
-from app.models.enums import WorkspaceRole
+from app.models.enums import ProjectStatus, WorkspaceRole
+from app.models.project import Project
+from app.models.task import Task
 from app.models.workspace import Workspace, WorkspaceMember
 
 ModelT = TypeVar("ModelT", bound=Base)
@@ -21,7 +23,9 @@ class BaseRepository(Generic[ModelT]):
     async def _paginate(
         self, stmt: Select[tuple[ModelT]], *, page: int = 1, limit: int = 20
     ) -> tuple[list[ModelT], int]:
-        total = await self.session.scalar(select(func.count()).select_from(stmt.subquery()))
+        total = await self.session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        )
         ordered = (
             stmt.order_by(*inspect(self.model).primary_key)
             .offset((page - 1) * limit)
@@ -53,7 +57,9 @@ class BaseRepository(Generic[ModelT]):
         await self.session.delete(obj)
         await self.session.flush()
 
-    async def workspace_role(self, workspace_id: int, user_id: int) -> WorkspaceRole | None:
+    async def workspace_role(
+        self, workspace_id: int, user_id: int
+    ) -> WorkspaceRole | None:
         owner_id = await self.session.scalar(
             select(Workspace.owner_id).where(Workspace.id == workspace_id)
         )
@@ -76,16 +82,9 @@ class BaseRepository(Generic[ModelT]):
             or_(Workspace.owner_id == user_id, Workspace.id.in_(member_of))
         )
 
-    async def workspace_id_of_project(self, project_id: int) -> int | None:
-        from app.models.project import Project
-        return await self.session.scalar(
-            select(Project.workspace_id).where(Project.id == project_id)
-        )
-
-    async def get_project_workspace_and_status(
+    async def workspace_id_of_project(
         self, project_id: int
-    ) -> tuple[int, Any] | None:
-        from app.models.project import Project
+    ) -> tuple[int, ProjectStatus] | None:
         row = (
             await self.session.execute(
                 select(Project.workspace_id, Project.status).where(
@@ -95,32 +94,14 @@ class BaseRepository(Generic[ModelT]):
         ).first()
         return (row[0], row[1]) if row else None
 
-    async def is_user_active(self, user_id: int) -> bool:
-        from app.models.user import User
-        is_active = await self.session.scalar(
-            select(User.is_active).where(User.id == user_id)
-        )
-        return bool(is_active)
-
-    async def is_task_project_archived(self, task_id: int) -> bool:
-        from app.models.enums import ProjectStatus
-        from app.models.project import Project
-        from app.models.task import Task
-        status = await self.session.scalar(
-            select(Project.status)
-            .join(Task, Task.project_id == Project.id)
-            .where(Task.id == task_id)
-        )
-        return status == ProjectStatus.ARCHIVED
-
-    async def get_task_with_workspace(self, task_id: int) -> tuple[Any, int] | None:
-        from app.models.project import Project
-        from app.models.task import Task
+    async def get_task_with_workspace(
+        self, task_id: int
+    ) -> tuple[Task, int, ProjectStatus] | None:
         row = (
             await self.session.execute(
-                select(Task, Project.workspace_id)
+                select(Task, Project.workspace_id, Project.status)
                 .join(Project, Task.project_id == Project.id)
                 .where(Task.id == task_id)
             )
         ).first()
-        return (row[0], row[1]) if row else None
+        return (row[0], row[1], row[2]) if row else None
