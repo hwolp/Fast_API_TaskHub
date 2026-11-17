@@ -22,5 +22,6 @@ TASK_NOT_FOUND = "task_not_found"
 LABEL_NOT_FOUND = "label_not_found"
 COMMENT_NOT_FOUND = "comment_not_found"
 ASSIGNEE_NOT_IN_WORKSPACE = "assignee_not_in_workspace"
+ASSIGNEE_INVALID_ROLE = "assignee_invalid_role"
+ASSIGNEE_INACTIVE = "assignee_inactive"
 LABEL_PROJECT_MISMATCH = "label_project_mismatch"
-

@@ -16,9 +16,10 @@ class CommentService(ScopedService[CommentRepository]):
     async def _load(
         self, comment_id: int, user: User
     ) -> tuple[Comment, WorkspaceRole]:
-        return await self.load_with_workspace(
+        comment, role, *_ = await self.load_with_workspace(
             comment_id, user, self.repository.get_with_workspace, messages.COMMENT_NOT_FOUND
         )
+        return comment, role
 
     async def create_comment(self, data: CommentCreate, user: User) -> Comment:
         found = await self.repository.get_task_with_workspace(data.task_id)

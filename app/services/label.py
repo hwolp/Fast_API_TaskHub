@@ -14,23 +14,25 @@ from app.services.base import ScopedService
 
 class LabelService(ScopedService[LabelRepository]):
     async def _load(self, label_id: int, user: User) -> tuple[Label, WorkspaceRole]:
-        return await self.load_with_workspace(
+        label, role, *_ = await self.load_with_workspace(
             label_id, user, self.repository.get_with_workspace, messages.LABEL_NOT_FOUND
         )
+        return label, role
 
     async def _load_task(self, task_id: int, user: User) -> tuple[Task, WorkspaceRole]:
-        return await self.load_with_workspace(
+        task, role, *_ = await self.load_with_workspace(
             task_id, user, self.repository.get_task_with_workspace, messages.TASK_NOT_FOUND
         )
+        return task, role
 
     async def create_label(self, data: LabelCreate, user: User) -> Label:
-        workspace_id = await self.repository.workspace_id_of_project(data.project_id)
+        proj_info = await self.repository.workspace_id_of_project(data.project_id)
         role = (
-            await self.get_user_workspace_role(workspace_id, user)
-            if workspace_id is not None
+            await self.get_user_workspace_role(proj_info[0], user)
+            if proj_info is not None
             else None
         )
-        if role is None:
+        if proj_info is None or role is None:
             raise NotFoundError(messages.PROJECT_NOT_FOUND)
         if not can_manage_label(role):
             raise ForbiddenError(messages.FORBIDDEN)

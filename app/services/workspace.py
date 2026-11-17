@@ -5,7 +5,11 @@ from app.core.exceptions import (
     ForbiddenError,
     NotFoundError,
 )
-from app.core.permissions import can_manage_members, can_manage_workspace
+from app.core.permissions import (
+    WRITE_ROLES,
+    can_manage_members,
+    can_manage_workspace,
+)
 from app.models import User, Workspace, WorkspaceMember
 from app.models.enums import WorkspaceRole
 from app.repositories.workspace import WorkspaceRepository
@@ -109,6 +113,10 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         member = await self.repository.get_member(workspace_id, member_user_id)
         if member is None:
             raise NotFoundError(messages.MEMBER_NOT_FOUND)
+        if data.role not in WRITE_ROLES:
+            await self.repository.unassign_workspace_member_tasks(
+                workspace_id, member_user_id
+            )
         updated = await self.repository.update_member(member, data.role)
         await self.session.commit()
         return updated
