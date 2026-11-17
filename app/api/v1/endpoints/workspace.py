@@ -1,9 +1,9 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from app.dependencies import CurrentUser, get_workspace_service
-from app.schemas.pagination import PaginatedResponse
+from app.schemas.pagination import PaginatedResponse, PaginationDep
 from app.schemas.workspace import (
     WorkspaceCreate,
     WorkspaceMemberAdd,
@@ -18,32 +18,50 @@ router = APIRouter()
 WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 
-@router.post("/", response_model=WorkspaceResponse, status_code=201)
+@router.post(
+    "/",
+    response_model=WorkspaceResponse,
+    status_code=201,
+    summary="Create a new workspace",
+)
 async def create_workspace(
     data: WorkspaceCreate, user: CurrentUser, service: WorkspaceServiceDep
 ):
     return await service.create_workspace(data, user)
 
 
-@router.get("/", response_model=PaginatedResponse[WorkspaceResponse])
+@router.get(
+    "/",
+    response_model=PaginatedResponse[WorkspaceResponse],
+    summary="List workspaces with pagination",
+)
 async def list_workspaces(
     user: CurrentUser,
     service: WorkspaceServiceDep,
-    page: Annotated[int, Query(ge=1)] = 1,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    pagination: PaginationDep,
 ):
-    items, total = await service.list_workspaces(user, page=page, limit=limit)
+    items, total = await service.list_workspaces(
+        user, page=pagination.page, limit=pagination.limit
+    )
     return PaginatedResponse(items=items, total=total)
 
 
-@router.get("/{workspace_id}", response_model=WorkspaceResponse)
+@router.get(
+    "/{workspace_id}",
+    response_model=WorkspaceResponse,
+    summary="Get workspace details by ID",
+)
 async def get_workspace(
     workspace_id: int, user: CurrentUser, service: WorkspaceServiceDep
 ):
     return await service.get_workspace(workspace_id, user)
 
 
-@router.patch("/{workspace_id}", response_model=WorkspaceResponse)
+@router.patch(
+    "/{workspace_id}",
+    response_model=WorkspaceResponse,
+    summary="Update workspace name",
+)
 async def update_workspace(
     workspace_id: int,
     data: WorkspaceUpdate,
@@ -53,7 +71,11 @@ async def update_workspace(
     return await service.update_workspace(workspace_id, data, user)
 
 
-@router.delete("/{workspace_id}", status_code=204)
+@router.delete(
+    "/{workspace_id}",
+    status_code=204,
+    summary="Delete a workspace",
+)
 async def delete_workspace(
     workspace_id: int, user: CurrentUser, service: WorkspaceServiceDep
 ):
@@ -61,7 +83,9 @@ async def delete_workspace(
 
 
 @router.get(
-    "/{workspace_id}/members", response_model=list[WorkspaceMemberResponse]
+    "/{workspace_id}/members",
+    response_model=list[WorkspaceMemberResponse],
+    summary="List all members in a workspace",
 )
 async def list_members(
     workspace_id: int, user: CurrentUser, service: WorkspaceServiceDep
@@ -73,6 +97,7 @@ async def list_members(
     "/{workspace_id}/members",
     response_model=WorkspaceMemberResponse,
     status_code=201,
+    summary="Add a new member to a workspace",
 )
 async def add_member(
     workspace_id: int,
@@ -86,6 +111,7 @@ async def add_member(
 @router.patch(
     "/{workspace_id}/members/{member_user_id}",
     response_model=WorkspaceMemberResponse,
+    summary="Update member role in a workspace",
 )
 async def update_member_role(
     workspace_id: int,
@@ -99,7 +125,11 @@ async def update_member_role(
     )
 
 
-@router.delete("/{workspace_id}/members/{member_user_id}", status_code=204)
+@router.delete(
+    "/{workspace_id}/members/{member_user_id}",
+    status_code=204,
+    summary="Remove a member from a workspace or leave workspace",
+)
 async def remove_member(
     workspace_id: int,
     member_user_id: int,

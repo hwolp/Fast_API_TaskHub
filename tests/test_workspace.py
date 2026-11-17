@@ -216,3 +216,71 @@ class WorkspaceTests(unittest.IsolatedAsyncioTestCase):
 
         r = await self.client.get(f"{API}{ws_id}", headers=self.auth("bob"))
         self.assertEqual(r.status_code, 404)
+
+    async def test_workspace_edge_cases(self):
+        r = await self.client.post(
+            API, json={"name": "Edge Case Hub"}, headers=self.auth("alice")
+        )
+        ws_id = r.json()["id"]
+
+        r_missing = await self.client.post(
+            f"{API}{ws_id}/members",
+            json={"user_id": 99999, "role": "VIEWER"},
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(r_missing.status_code, 404)
+        self.assertEqual(r_missing.json()["detail"], "user_not_found")
+
+        r_owner = await self.client.post(
+            f"{API}{ws_id}/members",
+            json={"user_id": self.uid["alice"], "role": "VIEWER"},
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(r_owner.status_code, 409)
+        self.assertEqual(r_owner.json()["detail"], "member_already_exists")
+
+        r_add_bob = await self.client.post(
+            f"{API}{ws_id}/members",
+            json={"user_id": self.uid["bob"], "role": "EDITOR"},
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(r_add_bob.status_code, 201)
+
+        r_patch_owner = await self.client.patch(
+            f"{API}{ws_id}/members/{self.uid['bob']}",
+            json={"role": "OWNER"},
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(r_patch_owner.status_code, 422)
+
+        r_patch_missing = await self.client.patch(
+            f"{API}{ws_id}/members/{self.uid['carol']}",
+            json={"role": "VIEWER"},
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(r_patch_missing.status_code, 404)
+        self.assertEqual(r_patch_missing.json()["detail"], "member_not_found")
+
+        r_del_missing = await self.client.delete(
+            f"{API}{ws_id}/members/{self.uid['carol']}",
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(r_del_missing.status_code, 404)
+        self.assertEqual(r_del_missing.json()["detail"], "member_not_found")
+
+        await self.client.post(
+            f"{API}{ws_id}/members",
+            json={"user_id": self.uid["carol"], "role": "VIEWER"},
+            headers=self.auth("alice"),
+        )
+        await self.client.patch(
+            f"{API}{ws_id}/members/{self.uid['bob']}",
+            json={"role": "VIEWER"},
+            headers=self.auth("alice"),
+        )
+        r_viewer_del = await self.client.delete(
+            f"{API}{ws_id}/members/{self.uid['carol']}",
+            headers=self.auth("bob"),
+        )
+        self.assertEqual(r_viewer_del.status_code, 403)
+        self.assertEqual(r_viewer_del.json()["detail"], "forbidden")
