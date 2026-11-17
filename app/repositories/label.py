@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Label, Project, TaskLabel, User
-from app.models.enums import UserRole
+from app.models.enums import ProjectStatus, UserRole
 from app.repositories.base import BaseRepository
 
 
@@ -10,15 +10,17 @@ class LabelRepository(BaseRepository[Label]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Label, session)
 
-    async def get_with_workspace(self, label_id: int) -> tuple[Label, int] | None:
+    async def get_with_workspace(
+        self, label_id: int
+    ) -> tuple[Label, int, ProjectStatus] | None:
         row = (
             await self.session.execute(
-                select(Label, Project.workspace_id)
+                select(Label, Project.workspace_id, Project.status)
                 .join(Project, Label.project_id == Project.id)
                 .where(Label.id == label_id)
             )
         ).first()
-        return (row[0], row[1]) if row else None
+        return (row[0], row[1], row[2]) if row else None
 
     async def list_visible(
         self,

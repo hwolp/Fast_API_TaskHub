@@ -6,24 +6,30 @@ from app.core.exceptions import (
 )
 from app.core.permissions import can_manage_label, can_modify_task
 from app.models import Label, Task, User
-from app.models.enums import WorkspaceRole
+from app.models.enums import ProjectStatus, WorkspaceRole
 from app.repositories.label import LabelRepository
 from app.schemas.label import LabelCreate, LabelUpdate
 from app.services.base import ScopedService
 
 
 class LabelService(ScopedService[LabelRepository]):
-    async def _load(self, label_id: int, user: User) -> tuple[Label, WorkspaceRole]:
-        label, role, *_ = await self.load_with_workspace(
+    async def _load(
+        self, label_id: int, user: User
+    ) -> tuple[Label, WorkspaceRole, int, ProjectStatus]:
+        return await self.load_with_workspace(
             label_id, user, self.repository.get_with_workspace, messages.LABEL_NOT_FOUND
         )
-        return label, role
 
-    async def _load_task(self, task_id: int, user: User) -> tuple[Task, WorkspaceRole]:
-        task, role, *_ = await self.load_with_workspace(
+    async def _load_task(
+        self, task_id: int, user: User
+    ) -> tuple[Task, WorkspaceRole, int, ProjectStatus]:
+        return await self.load_with_workspace(
             task_id, user, self.repository.get_task_with_workspace, messages.TASK_NOT_FOUND
         )
-        return task, role
+
+    def _ensure_project_active(self, status: ProjectStatus) -> None:
+        if status == ProjectStatus.ARCHIVED:
+            raise BadRequestError(messages.PROJECT_ARCHIVED)
 
     async def create_label(self, data: LabelCreate, user: User) -> Label:
         proj_info = await self.repository.workspace_id_of_project(data.project_id)
@@ -36,6 +42,7 @@ class LabelService(ScopedService[LabelRepository]):
             raise NotFoundError(messages.PROJECT_NOT_FOUND)
         if not can_manage_label(role):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(proj_info[1])
         label = await self.repository.create(**data.model_dump())
         await self.session.commit()
         return label
@@ -53,15 +60,16 @@ class LabelService(ScopedService[LabelRepository]):
         )
 
     async def get_label(self, label_id: int, user: User) -> Label:
-        label, _ = await self._load(label_id, user)
+        label, _, _, _ = await self._load(label_id, user)
         return label
 
     async def update_label(
         self, label_id: int, data: LabelUpdate, user: User
     ) -> Label:
-        label, role = await self._load(label_id, user)
+        label, role, _, project_status = await self._load(label_id, user)
         if not can_manage_label(role):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(project_status)
         updated = await self.repository.update(
             label, data.model_dump(exclude_unset=True)
         )
@@ -69,19 +77,21 @@ class LabelService(ScopedService[LabelRepository]):
         return updated
 
     async def delete_label(self, label_id: int, user: User) -> None:
-        label, role = await self._load(label_id, user)
+        label, role, _, project_status = await self._load(label_id, user)
         if not can_manage_label(role):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(project_status)
         await self.repository.delete(label)
         await self.session.commit()
 
     async def attach_label_to_task(
         self, task_id: int, label_id: int, user: User
     ) -> None:
-        task, role = await self._load_task(task_id, user)
-        label, _ = await self._load(label_id, user)
+        task, role, _, project_status = await self._load_task(task_id, user)
+        label, _, _, _ = await self._load(label_id, user)
         if not can_modify_task(role, task, user):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(project_status)
         if label.project_id != task.project_id:
             raise BadRequestError(messages.LABEL_PROJECT_MISMATCH)
         await self.repository.attach_to_task(task_id, label_id)
@@ -90,9 +100,12 @@ class LabelService(ScopedService[LabelRepository]):
     async def detach_label_from_task(
         self, task_id: int, label_id: int, user: User
     ) -> None:
-        task, role = await self._load_task(task_id, user)
-        await self._load(label_id, user)
+        task, role, _, project_status = await self._load_task(task_id, user)
+        label, _, _, _ = await self._load(label_id, user)
         if not can_modify_task(role, task, user):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(project_status)
+        if label.project_id != task.project_id:
+            raise BadRequestError(messages.LABEL_PROJECT_MISMATCH)
         await self.repository.detach_from_task(task_id, label_id)
         await self.session.commit()

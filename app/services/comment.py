@@ -1,12 +1,12 @@
 from app.core import messages
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.core.permissions import (
     can_create_comment,
     can_delete_comment,
     can_modify_comment,
 )
 from app.models import Comment, User
-from app.models.enums import WorkspaceRole
+from app.models.enums import ProjectStatus, WorkspaceRole
 from app.repositories.comment import CommentRepository
 from app.schemas.comment import CommentCreate, CommentUpdate
 from app.services.base import ScopedService
@@ -15,11 +15,14 @@ from app.services.base import ScopedService
 class CommentService(ScopedService[CommentRepository]):
     async def _load(
         self, comment_id: int, user: User
-    ) -> tuple[Comment, WorkspaceRole]:
-        comment, role, *_ = await self.load_with_workspace(
+    ) -> tuple[Comment, WorkspaceRole, int, ProjectStatus]:
+        return await self.load_with_workspace(
             comment_id, user, self.repository.get_with_workspace, messages.COMMENT_NOT_FOUND
         )
-        return comment, role
+
+    def _ensure_project_active(self, status: ProjectStatus) -> None:
+        if status == ProjectStatus.ARCHIVED:
+            raise BadRequestError(messages.PROJECT_ARCHIVED)
 
     async def create_comment(self, data: CommentCreate, user: User) -> Comment:
         found = await self.repository.get_task_with_workspace(data.task_id)
@@ -30,6 +33,7 @@ class CommentService(ScopedService[CommentRepository]):
             raise NotFoundError(messages.TASK_NOT_FOUND)
         if not can_create_comment(role):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(found[2])
         comment = await self.repository.create(**data.model_dump(), author_id=user.id)
         await self.session.commit()
         return comment
@@ -47,15 +51,16 @@ class CommentService(ScopedService[CommentRepository]):
         )
 
     async def get_comment(self, comment_id: int, user: User) -> Comment:
-        comment, _ = await self._load(comment_id, user)
+        comment, _, _, _ = await self._load(comment_id, user)
         return comment
 
     async def update_comment(
         self, comment_id: int, data: CommentUpdate, user: User
     ) -> Comment:
-        comment, role = await self._load(comment_id, user)
+        comment, role, _, project_status = await self._load(comment_id, user)
         if not can_modify_comment(role, comment, user):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(project_status)
         updated = await self.repository.update(
             comment, data.model_dump(exclude_unset=True)
         )
@@ -63,8 +68,9 @@ class CommentService(ScopedService[CommentRepository]):
         return updated
 
     async def delete_comment(self, comment_id: int, user: User) -> None:
-        comment, role = await self._load(comment_id, user)
+        comment, role, _, project_status = await self._load(comment_id, user)
         if not can_delete_comment(role, comment, user):
             raise ForbiddenError(messages.FORBIDDEN)
+        self._ensure_project_active(project_status)
         await self.repository.delete(comment)
         await self.session.commit()

@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Comment, Project, Task, User
-from app.models.enums import UserRole
+from app.models.enums import ProjectStatus, UserRole
 from app.repositories.base import BaseRepository
 
 
@@ -10,16 +10,18 @@ class CommentRepository(BaseRepository[Comment]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Comment, session)
 
-    async def get_with_workspace(self, comment_id: int) -> tuple[Comment, int] | None:
+    async def get_with_workspace(
+        self, comment_id: int
+    ) -> tuple[Comment, int, ProjectStatus] | None:
         row = (
             await self.session.execute(
-                select(Comment, Project.workspace_id)
+                select(Comment, Project.workspace_id, Project.status)
                 .join(Task, Comment.task_id == Task.id)
                 .join(Project, Task.project_id == Project.id)
                 .where(Comment.id == comment_id)
             )
         ).first()
-        return (row[0], row[1]) if row else None
+        return (row[0], row[1], row[2]) if row else None
 
     async def list_visible(
         self,
