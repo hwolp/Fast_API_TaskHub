@@ -12,8 +12,10 @@ from app.models import User
 from app.models.enums import TokenType
 from app.repositories.auth import AuthRepository
 from app.repositories.task import TaskRepository
+from app.repositories.workspace import WorkspaceRepository
 from app.services.auth import AuthService
 from app.services.task import TaskService
+from app.services.workspace import WorkspaceService
 
 bearer = HTTPBearer(auto_error=False)
 SessionDep = Annotated[AsyncSession, Depends(get_db)]
@@ -31,6 +33,10 @@ def get_auth_service(
 
 def get_task_service(session: SessionDep) -> TaskService:
     return TaskService(TaskRepository(session))
+
+
+def get_workspace_service(session: SessionDep) -> WorkspaceService:
+    return WorkspaceService(WorkspaceRepository(session))
 
 
 async def get_current_user(
