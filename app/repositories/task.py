@@ -18,22 +18,22 @@ class TaskRepository(BaseRepository[Task]):
     async def get_assignee_info(
         self, workspace_id: int, user_id: int
     ) -> tuple[bool, WorkspaceRole | None] | None:
-        row = (
-            await self.session.execute(
-                select(
-                    User.is_active,
-                    Workspace.owner_id,
-                    WorkspaceMember.role,
-                )
-                .join(Workspace, Workspace.id == workspace_id)
-                .outerjoin(
-                    WorkspaceMember,
-                    (WorkspaceMember.workspace_id == workspace_id)
-                    & (WorkspaceMember.user_id == User.id),
-                )
-                .where(User.id == user_id)
+        stmt = (
+            select(
+                User.is_active,
+                Workspace.owner_id,
+                WorkspaceMember.role,
             )
-        ).first()
+            .select_from(User)
+            .join(Workspace, Workspace.id == workspace_id)
+            .outerjoin(
+                WorkspaceMember,
+                (WorkspaceMember.workspace_id == Workspace.id)
+                & (WorkspaceMember.user_id == User.id),
+            )
+            .where(User.id == user_id)
+        )
+        row = (await self.session.execute(stmt)).first()
         if row is None:
             return None
         is_active, owner_id, member_role = row

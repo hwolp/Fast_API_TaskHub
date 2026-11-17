@@ -190,7 +190,7 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad_patch.status_code, 400)
         bad_viewer = await self.call(
             "PATCH", f"{API}{task['id']}", "alice", json={"assignee_id": self.uid["carol"]})
-        self.assertEqual((bad_viewer.status_code, bad_viewer.json()["detail"]), (400, "assignee_not_in_workspace"))
+        self.assertEqual((bad_viewer.status_code, bad_viewer.json()["detail"]), (400, "assignee_invalid_role"))
         good = await self.call(
             "PATCH", f"{API}{task['id']}", "alice", json={"assignee_id": self.uid["bob"]})
         self.assertEqual((good.status_code, good.json()["assignee_id"]), (200, self.uid["bob"]))
@@ -256,12 +256,34 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
                 update(Project).where(Project.id == self.p1).values(status=ProjectStatus.ARCHIVED)
             )
             await session.commit()
+
+        # VIEWER receives 403 before archived check (404 -> 403 -> 400)
+        for method, path, payload in (
+            ("POST", API, {"title": "v", "project_id": self.p1}),
+            ("PATCH", f"{API}{task['id']}", {"title": "v"}),
+            ("DELETE", f"{API}{task['id']}", None),
+        ):
+            kw = {"json": payload} if payload is not None else {}
+            v_res = await self.call(method, path, "carol", **kw)
+            self.assertEqual(v_res.status_code, 403, method)
+
+        # OWNER receives 400 project_archived for create, update, and delete
         res = await self.call("POST", API, "alice", json={"title": "archived task", "project_id": self.p1})
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json()["detail"], "project_archived")
+        self.assertEqual((res.status_code, res.json()["detail"]), (400, "project_archived"))
         patch_res = await self.call("PATCH", f"{API}{task['id']}", "alice", json={"title": "new title"})
-        self.assertEqual(patch_res.status_code, 400)
-        self.assertEqual(patch_res.json()["detail"], "project_archived")
+        self.assertEqual((patch_res.status_code, patch_res.json()["detail"]), (400, "project_archived"))
+        del_res = await self.call("DELETE", f"{API}{task['id']}", "alice")
+        self.assertEqual((del_res.status_code, del_res.json()["detail"]), (400, "project_archived"))
+
+        # Unarchive project via PATCH /api/v1/projects/{id}, then update and delete succeed
+        unarchive_res = await self.call(
+            "PATCH", f"/api/v1/projects/{self.p1}", "alice", json={"status": "ACTIVE"}
+        )
+        self.assertEqual(unarchive_res.status_code, 200)
+        ok_patch = await self.call("PATCH", f"{API}{task['id']}", "alice", json={"title": "restored"})
+        self.assertEqual((ok_patch.status_code, ok_patch.json()["title"]), (200, "restored"))
+        ok_del = await self.call("DELETE", f"{API}{task['id']}", "alice")
+        self.assertEqual(ok_del.status_code, 204)
 
     async def test_assignee_cannot_be_inactive_user(self):
         from sqlalchemy import update
@@ -274,19 +296,38 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             "title": "task for inactive", "project_id": self.p1, "assignee_id": self.uid["bob"]
         })
         self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json()["detail"], "assignee_not_in_workspace")
+        self.assertEqual(res.json()["detail"], "assignee_inactive")
 
-    async def test_unassign_tasks_when_member_removed_from_workspace(self):
-        task = await self.make_task("alice", assignee_id=self.uid["erin"])
-        self.assertEqual(task["assignee_id"], self.uid["erin"])
+    async def test_unassign_tasks_when_member_removed_or_demoted(self):
+        task_erin = await self.make_task("alice", assignee_id=self.uid["erin"])
+        task_bob = await self.make_task("alice", assignee_id=self.uid["bob"])
+        self.assertEqual(task_erin["assignee_id"], self.uid["erin"])
+        self.assertEqual(task_bob["assignee_id"], self.uid["bob"])
+
         ws_api = "/api/v1/workspaces/"
+        # Demote bob EDITOR -> VIEWER -> task_bob is unassigned
+        demote_res = await self.call(
+            "PATCH", f"{ws_api}{self.ws1}/members/{self.uid['bob']}", "alice", json={"role": "VIEWER"}
+        )
+        self.assertEqual(demote_res.status_code, 200)
+        get_bob_task = await self.call("GET", f"{API}{task_bob['id']}", "alice")
+        self.assertEqual(get_bob_task.status_code, 200)
+        self.assertIsNone(get_bob_task.json()["assignee_id"])
+
+        # erin leaves workspace by themselves -> task_erin is unassigned
+        leave_res = await self.call(
+            "DELETE", f"{ws_api}{self.ws1}/members/{self.uid['erin']}", "erin"
+        )
+        self.assertEqual(leave_res.status_code, 204)
+        get_erin_task = await self.call("GET", f"{API}{task_erin['id']}", "alice")
+        self.assertEqual(get_erin_task.status_code, 200)
+        self.assertIsNone(get_erin_task.json()["assignee_id"])
+
+        # Owner removes remaining member (carol)
         del_res = await self.call(
-            "DELETE", f"{ws_api}{self.ws1}/members/{self.uid['erin']}", "alice"
+            "DELETE", f"{ws_api}{self.ws1}/members/{self.uid['carol']}", "alice"
         )
         self.assertEqual(del_res.status_code, 204)
-        get_res = await self.call("GET", f"{API}{task['id']}", "alice")
-        self.assertEqual(get_res.status_code, 200)
-        self.assertIsNone(get_res.json()["assignee_id"])
 
 
 if __name__ == "__main__":

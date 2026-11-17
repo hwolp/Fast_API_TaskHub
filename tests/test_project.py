@@ -135,12 +135,17 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_and_get_project_rbac(self):
         r = await self.client.post(
             API,
-            json={"workspace_id": self.ws_id["ws1"], "name": "Alice Project"},
+            json={
+                "workspace_id": self.ws_id["ws1"],
+                "name": "Alice Project",
+                "status": "ARCHIVED",
+            },
             headers=self.auth("alice"),
         )
         self.assertEqual(r.status_code, 201)
         p1 = r.json()
         self.assertEqual(p1["name"], "Alice Project")
+        self.assertEqual(p1["status"], "ACTIVE")
 
         r = await self.client.post(
             API,
@@ -249,9 +254,34 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         r = await self.client.delete(f"{API}{p_id}", headers=self.auth("carol"))
         self.assertEqual(r.status_code, 403)
 
+        # Non-member receives 404 on PATCH and DELETE (anti-IDOR)
+        r = await self.client.patch(
+            f"{API}{p_id}",
+            json={"name": "Dave Hack"},
+            headers=self.auth("dave"),
+        )
+        self.assertEqual((r.status_code, r.json()["detail"]), (404, "project_not_found"))
+
+        r = await self.client.delete(f"{API}{p_id}", headers=self.auth("dave"))
+        self.assertEqual((r.status_code, r.json()["detail"]), (404, "project_not_found"))
+
+        # Create a child task inside project, then delete project -> child task is cascade deleted
+        task_res = await self.client.post(
+            "/api/v1/tasks/",
+            json={"title": "Child Task", "project_id": p_id},
+            headers=self.auth("alice"),
+        )
+        self.assertEqual(task_res.status_code, 201)
+        child_task_id = task_res.json()["id"]
+
         r = await self.client.delete(f"{API}{p_id}", headers=self.auth("alice"))
         self.assertEqual(r.status_code, 204)
 
         r = await self.client.get(f"{API}{p_id}", headers=self.auth("alice"))
+        self.assertEqual(r.status_code, 404)
+
+        r = await self.client.get(
+            f"/api/v1/tasks/{child_task_id}", headers=self.auth("alice")
+        )
         self.assertEqual(r.status_code, 404)
 
