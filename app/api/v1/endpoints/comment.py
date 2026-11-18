@@ -1,18 +1,18 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
-from app.dependencies import CurrentUser, get_comment_service
+from app.api.v1.params import IdPath
+from app.api.v1.responses import (
+    BAD_REQUEST_RESPONSE,
+    FORBIDDEN_RESPONSE,
+    NOT_FOUND_RESPONSE,
+)
+from app.dependencies import CommentServiceDep, CurrentUser
 from app.schemas.comment import CommentCreate, CommentResponse, CommentUpdate
 from app.schemas.pagination import PaginatedResponse, PaginationDep
-from app.services.comment import CommentService
 
 router = APIRouter()
-CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]
-
-BAD_REQUEST_RESPONSE = {400: {"description": "Archived project"}}
-FORBIDDEN_RESPONSE = {403: {"description": "Forbidden"}}
-NOT_FOUND_RESPONSE = {404: {"description": "Comment or task not found"}}
 
 
 @router.post(
@@ -29,7 +29,8 @@ NOT_FOUND_RESPONSE = {404: {"description": "Comment or task not found"}}
 async def create_comment(
     data: CommentCreate, user: CurrentUser, service: CommentServiceDep
 ) -> CommentResponse:
-    return await service.create_comment(data, user)
+    comment = await service.create_comment(data, user)
+    return CommentResponse.model_validate(comment)
 
 
 @router.get(
@@ -47,11 +48,13 @@ async def list_comments(
 ) -> PaginatedResponse[CommentResponse]:
     items, total = await service.list_comments(
         user,
+        pagination=pagination,
         task_id=task_id,
-        page=pagination.page,
-        limit=pagination.limit,
     )
-    return PaginatedResponse(items=items, total=total)
+    return PaginatedResponse(
+        items=[CommentResponse.model_validate(item) for item in items],
+        total=total,
+    )
 
 
 @router.get(
@@ -61,9 +64,10 @@ async def list_comments(
     responses=NOT_FOUND_RESPONSE,
 )
 async def get_comment(
-    comment_id: int, user: CurrentUser, service: CommentServiceDep
+    comment_id: IdPath, user: CurrentUser, service: CommentServiceDep
 ) -> CommentResponse:
-    return await service.get_comment(comment_id, user)
+    comment = await service.get_comment(comment_id, user)
+    return CommentResponse.model_validate(comment)
 
 
 @router.patch(
@@ -77,12 +81,13 @@ async def get_comment(
     },
 )
 async def update_comment(
-    comment_id: int,
+    comment_id: IdPath,
     data: CommentUpdate,
     user: CurrentUser,
     service: CommentServiceDep,
 ) -> CommentResponse:
-    return await service.update_comment(comment_id, data, user)
+    updated = await service.update_comment(comment_id, data, user)
+    return CommentResponse.model_validate(updated)
 
 
 @router.delete(
@@ -96,6 +101,6 @@ async def update_comment(
     },
 )
 async def delete_comment(
-    comment_id: int, user: CurrentUser, service: CommentServiceDep
+    comment_id: IdPath, user: CurrentUser, service: CommentServiceDep
 ) -> None:
     await service.delete_comment(comment_id, user)

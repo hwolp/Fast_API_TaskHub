@@ -1,18 +1,19 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
-from app.dependencies import CurrentUser, get_label_service
+from app.api.v1.params import IdPath
+from app.api.v1.responses import (
+    BAD_REQUEST_RESPONSE,
+    CONFLICT_RESPONSE,
+    FORBIDDEN_RESPONSE,
+    NOT_FOUND_RESPONSE,
+)
+from app.dependencies import CurrentUser, LabelServiceDep
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
 from app.schemas.pagination import PaginatedResponse, PaginationDep
-from app.services.label import LabelService
 
 router = APIRouter()
-LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
-
-BAD_REQUEST_RESPONSE = {400: {"description": "Archived project"}}
-FORBIDDEN_RESPONSE = {403: {"description": "Forbidden"}}
-NOT_FOUND_RESPONSE = {404: {"description": "Label or project not found"}}
 
 
 @router.post(
@@ -24,12 +25,14 @@ NOT_FOUND_RESPONSE = {404: {"description": "Label or project not found"}}
         **BAD_REQUEST_RESPONSE,
         **FORBIDDEN_RESPONSE,
         **NOT_FOUND_RESPONSE,
+        **CONFLICT_RESPONSE,
     },
 )
 async def create_label(
     data: LabelCreate, user: CurrentUser, service: LabelServiceDep
 ) -> LabelResponse:
-    return await service.create_label(data, user)
+    label = await service.create_label(data, user)
+    return LabelResponse.model_validate(label)
 
 
 @router.get(
@@ -47,11 +50,13 @@ async def list_labels(
 ) -> PaginatedResponse[LabelResponse]:
     items, total = await service.list_labels(
         user,
+        pagination=pagination,
         project_id=project_id,
-        page=pagination.page,
-        limit=pagination.limit,
     )
-    return PaginatedResponse(items=items, total=total)
+    return PaginatedResponse(
+        items=[LabelResponse.model_validate(item) for item in items],
+        total=total,
+    )
 
 
 @router.get(
@@ -61,9 +66,10 @@ async def list_labels(
     responses=NOT_FOUND_RESPONSE,
 )
 async def get_label(
-    label_id: int, user: CurrentUser, service: LabelServiceDep
+    label_id: IdPath, user: CurrentUser, service: LabelServiceDep
 ) -> LabelResponse:
-    return await service.get_label(label_id, user)
+    label = await service.get_label(label_id, user)
+    return LabelResponse.model_validate(label)
 
 
 @router.patch(
@@ -74,15 +80,17 @@ async def get_label(
         **BAD_REQUEST_RESPONSE,
         **FORBIDDEN_RESPONSE,
         **NOT_FOUND_RESPONSE,
+        **CONFLICT_RESPONSE,
     },
 )
 async def update_label(
-    label_id: int,
+    label_id: IdPath,
     data: LabelUpdate,
     user: CurrentUser,
     service: LabelServiceDep,
 ) -> LabelResponse:
-    return await service.update_label(label_id, data, user)
+    updated = await service.update_label(label_id, data, user)
+    return LabelResponse.model_validate(updated)
 
 
 @router.delete(
@@ -96,6 +104,6 @@ async def update_label(
     },
 )
 async def delete_label(
-    label_id: int, user: CurrentUser, service: LabelServiceDep
+    label_id: IdPath, user: CurrentUser, service: LabelServiceDep
 ) -> None:
     await service.delete_label(label_id, user)

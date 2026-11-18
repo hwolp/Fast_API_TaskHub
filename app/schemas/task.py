@@ -1,8 +1,10 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
+from app.core import messages
 from app.models.enums import TaskPriority, TaskStatus
+from app.schemas.label import LabelResponse
 
 
 class TaskBase(BaseModel):
@@ -15,7 +17,7 @@ class TaskBase(BaseModel):
 
 
 class TaskCreate(TaskBase):
-    project_id: int = Field(..., description="ID dự án chứa task")
+    project_id: PositiveInt = Field(..., description="ID dự án chứa task")
 
 
 class TaskUpdate(BaseModel):
@@ -30,7 +32,7 @@ class TaskUpdate(BaseModel):
     def reject_null_for_required_columns(self) -> "TaskUpdate":
         for name in ("title", "status", "priority"):
             if name in self.model_fields_set and getattr(self, name) is None:
-                raise ValueError(f"{name} must not be null")
+                raise ValueError(messages.CANNOT_BE_NULL)
         return self
 
 
@@ -39,5 +41,6 @@ class TaskResponse(TaskBase):
     project_id: int
     created_by: int
     created_at: datetime
+    labels: list[LabelResponse] = []
 
     model_config = ConfigDict(from_attributes=True)

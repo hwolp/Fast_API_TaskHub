@@ -1,22 +1,22 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
-from app.dependencies import CurrentUser, get_label_service, get_task_service
+from app.api.v1.params import IdPath
+from app.api.v1.responses import (
+    BAD_REQUEST_RESPONSE,
+    FORBIDDEN_RESPONSE,
+    NOT_FOUND_RESPONSE,
+)
+from app.dependencies import (
+    CurrentUser,
+    LabelServiceDep,
+    TaskServiceDep,
+)
 from app.schemas.pagination import PaginatedResponse, PaginationDep
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
-from app.services.label import LabelService
-from app.services.task import TaskService
 
 router = APIRouter()
-TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
-LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
-
-BAD_REQUEST_RESPONSE = {
-    400: {"description": "Invalid assignee or archived project"}
-}
-FORBIDDEN_RESPONSE = {403: {"description": "Forbidden"}}
-NOT_FOUND_RESPONSE = {404: {"description": "Task or project not found"}}
 
 
 @router.post(
@@ -29,7 +29,8 @@ NOT_FOUND_RESPONSE = {404: {"description": "Task or project not found"}}
 async def create_task(
     data: TaskCreate, user: CurrentUser, service: TaskServiceDep
 ) -> TaskResponse:
-    return await service.create_task(data, user)
+    task = await service.create_task(data, user)
+    return TaskResponse.model_validate(task)
 
 
 @router.get(
@@ -47,11 +48,13 @@ async def list_tasks(
 ) -> PaginatedResponse[TaskResponse]:
     items, total = await service.list_tasks(
         user,
+        pagination=pagination,
         project_id=project_id,
-        page=pagination.page,
-        limit=pagination.limit,
     )
-    return PaginatedResponse(items=items, total=total)
+    return PaginatedResponse(
+        items=[TaskResponse.model_validate(item) for item in items],
+        total=total,
+    )
 
 
 @router.get(
@@ -61,9 +64,10 @@ async def list_tasks(
     responses=NOT_FOUND_RESPONSE,
 )
 async def get_task(
-    task_id: int, user: CurrentUser, service: TaskServiceDep
+    task_id: IdPath, user: CurrentUser, service: TaskServiceDep
 ) -> TaskResponse:
-    return await service.get_task(task_id, user)
+    task = await service.get_task(task_id, user)
+    return TaskResponse.model_validate(task)
 
 
 @router.patch(
@@ -73,9 +77,10 @@ async def get_task(
     responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
 )
 async def update_task(
-    task_id: int, data: TaskUpdate, user: CurrentUser, service: TaskServiceDep
+    task_id: IdPath, data: TaskUpdate, user: CurrentUser, service: TaskServiceDep
 ) -> TaskResponse:
-    return await service.update_task(task_id, data, user)
+    updated = await service.update_task(task_id, data, user)
+    return TaskResponse.model_validate(updated)
 
 
 @router.delete(
@@ -85,7 +90,7 @@ async def update_task(
     responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
 )
 async def delete_task(
-    task_id: int, user: CurrentUser, service: TaskServiceDep
+    task_id: IdPath, user: CurrentUser, service: TaskServiceDep
 ) -> None:
     await service.delete_task(task_id, user)
 
@@ -94,15 +99,16 @@ async def delete_task(
     "/{task_id}/labels/{label_id}",
     status_code=204,
     summary="Attach a label to a task",
+    description="Idempotent: attaches a label to the task. Repeated calls are safely ignored.",
     responses={
-        400: {"description": "Label project mismatch or archived project"},
+        **BAD_REQUEST_RESPONSE,
         **FORBIDDEN_RESPONSE,
-        404: {"description": "Task or label not found"},
+        **NOT_FOUND_RESPONSE,
     },
 )
 async def attach_label_to_task(
-    task_id: int,
-    label_id: int,
+    task_id: IdPath,
+    label_id: IdPath,
     user: CurrentUser,
     service: LabelServiceDep,
 ) -> None:
@@ -114,14 +120,14 @@ async def attach_label_to_task(
     status_code=204,
     summary="Detach a label from a task",
     responses={
-        400: {"description": "Label project mismatch or archived project"},
+        **BAD_REQUEST_RESPONSE,
         **FORBIDDEN_RESPONSE,
-        404: {"description": "Task or label not found"},
+        **NOT_FOUND_RESPONSE,
     },
 )
 async def detach_label_from_task(
-    task_id: int,
-    label_id: int,
+    task_id: IdPath,
+    label_id: IdPath,
     user: CurrentUser,
     service: LabelServiceDep,
 ) -> None:

@@ -71,3 +71,9 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
+ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
+LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
+CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]
