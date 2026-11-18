@@ -9,14 +9,14 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_token, read_key
 from app.main import app
-from app.models import Project, User, Workspace, WorkspaceMember
+from app.models import Label, Project, TaskLabel, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -289,11 +289,16 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
 
         url = f"{TASK_API}{task_bob['id']}/labels/{label['id']}"
 
-        # Creator (bob) and assignee (erin) can attach/detach (idempotent)
+        # Creator (bob) and assignee (erin) can attach/detach (idempotent attach)
         self.assertEqual((await self.call("POST", url, "bob")).status_code, 204)
         self.assertEqual((await self.call("POST", url, "erin")).status_code, 204)
         self.assertEqual((await self.call("DELETE", url, "erin")).status_code, 204)
-        self.assertEqual((await self.call("DELETE", url, "bob")).status_code, 204)
+        # Detach unattached label returns 404 label_not_attached
+        unattached_res = await self.call("DELETE", url, "bob")
+        self.assertEqual(
+            (unattached_res.status_code, unattached_res.json()["detail"]),
+            (404, "label_not_attached"),
+        )
 
         # Unrelated EDITOR (bob on alice's unassigned task) and VIEWER get 403
         alice_task_url = f"{TASK_API}{task_alice['id']}/labels/{label['id']}"
@@ -390,3 +395,108 @@ class LabelTests(unittest.IsolatedAsyncioTestCase):
             (await self.call("GET", f"{API}{label['id']}", "alice")).status_code,
             404,
         )
+
+    async def test_duplicate_label_name_in_same_project_returns_409(self):
+        # Create first label
+        res1 = await self.call(
+            "POST", API, "alice", json={"project_id": self.p1, "name": "Bug"}
+        )
+        self.assertEqual(res1.status_code, 201)
+        label1_id = res1.json()["id"]
+
+        # Duplicate create in same project -> 409
+        dup_create = await self.call(
+            "POST", API, "alice", json={"project_id": self.p1, "name": "Bug"}
+        )
+        self.assertEqual(
+            (dup_create.status_code, dup_create.json()["detail"]),
+            (409, "label_name_exists"),
+        )
+
+        # Create second label with different name
+        res2 = await self.call(
+            "POST", API, "alice", json={"project_id": self.p1, "name": "Feature"}
+        )
+        self.assertEqual(res2.status_code, 201)
+        label2_id = res2.json()["id"]
+
+        # Rename to duplicate -> 409
+        dup_rename = await self.call(
+            "PATCH", f"{API}{label2_id}", "alice", json={"name": "Bug"}
+        )
+        self.assertEqual(
+            (dup_rename.status_code, dup_rename.json()["detail"]),
+            (409, "label_name_exists"),
+        )
+
+        # Same name in a different project -> 201 (scoped to project)
+        other_proj_create = await self.call(
+            "POST", API, "alice", json={"project_id": self.p1_other, "name": "Bug"}
+        )
+        self.assertEqual(other_proj_create.status_code, 201)
+
+    async def test_task_labels_read_back_and_cascade_delete(self):
+        task = await self.make_task("alice")
+        label = await self.make_label("alice", project_id=self.p1, name="Frontend")
+        task_url = f"{TASK_API}{task['id']}"
+        attach_url = f"{task_url}/labels/{label['id']}"
+
+        # Initial task read-back has empty labels
+        init_task = (await self.call("GET", task_url, "alice")).json()
+        self.assertEqual(init_task["labels"], [])
+
+        # Attach label
+        self.assertEqual((await self.call("POST", attach_url, "alice")).status_code, 204)
+
+        # Task read-back includes attached label
+        with_label = (await self.call("GET", task_url, "alice")).json()
+        self.assertEqual(len(with_label["labels"]), 1)
+        self.assertEqual(with_label["labels"][0]["id"], label["id"])
+        self.assertEqual(with_label["labels"][0]["name"], "Frontend")
+
+        # Detach label
+        self.assertEqual((await self.call("DELETE", attach_url, "alice")).status_code, 204)
+
+        # Task read-back has empty labels again
+        after_detach = (await self.call("GET", task_url, "alice")).json()
+        self.assertEqual(after_detach["labels"], [])
+
+        # Re-attach and test delete label cascades to task_labels
+        self.assertEqual((await self.call("POST", attach_url, "alice")).status_code, 204)
+        del_label = await self.call("DELETE", f"{API}{label['id']}", "alice")
+        self.assertEqual(del_label.status_code, 204)
+
+        # Task read-back reflects deleted label
+        after_del_label = (await self.call("GET", task_url, "alice")).json()
+        self.assertEqual(after_del_label["labels"], [])
+
+        # Direct DB check on task_labels
+        async with self.sessions() as session:
+            count = (
+                await session.scalars(
+                    select(TaskLabel).where(TaskLabel.label_id == label["id"])
+                )
+            ).all()
+            self.assertEqual(len(count), 0)
+
+    async def test_label_validation_blank_name_and_invalid_color(self):
+        # Blank name -> 422
+        res_blank = await self.call(
+            "POST", API, "alice", json={"project_id": self.p1, "name": "   "}
+        )
+        self.assertEqual(res_blank.status_code, 422)
+
+        # Invalid hex color -> 422
+        res_bad_color = await self.call(
+            "POST",
+            API,
+            "alice",
+            json={"project_id": self.p1, "name": "Test", "color": "blue"},
+        )
+        self.assertEqual(res_bad_color.status_code, 422)
+
+        # Invalid project_id (<= 0) -> 422
+        res_bad_proj = await self.call(
+            "POST", API, "alice", json={"project_id": 0, "name": "Test"}
+        )
+        self.assertEqual(res_bad_proj.status_code, 422)

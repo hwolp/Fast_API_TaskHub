@@ -9,14 +9,14 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_token, read_key
 from app.main import app
-from app.models import Project, User, Workspace, WorkspaceMember
+from app.models import Comment, Project, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -357,3 +357,98 @@ class CommentTests(unittest.IsolatedAsyncioTestCase):
             (await self.call("GET", f"{API}{comment['id']}", "alice")).status_code,
             404,
         )
+
+    async def test_comment_validation_and_blank_content(self):
+        task = await self.make_task("alice")
+
+        # Whitespace-only content -> 422
+        res_ws = await self.call(
+            "POST", API, "alice", json={"task_id": task["id"], "content": "   "}
+        )
+        self.assertEqual(res_ws.status_code, 422)
+
+        # Empty content -> 422
+        res_empty = await self.call(
+            "POST", API, "alice", json={"task_id": task["id"], "content": ""}
+        )
+        self.assertEqual(res_empty.status_code, 422)
+
+        # Invalid task_id (<= 0) -> 422
+        res_bad_task = await self.call(
+            "POST", API, "alice", json={"task_id": 0, "content": "Valid"}
+        )
+        self.assertEqual(res_bad_task.status_code, 422)
+
+        # Valid create then whitespace-only update -> 422
+        comment = await self.make_comment("alice", task_id=task["id"], content="Valid")
+        res_update_ws = await self.call(
+            "PATCH", f"{API}{comment['id']}", "alice", json={"content": " \t\n "}
+        )
+        self.assertEqual(res_update_ws.status_code, 422)
+
+    async def test_comment_rbac_demoted_viewer_and_removed_member(self):
+        task = await self.make_task("alice")
+        comment = await self.make_comment("bob", task_id=task["id"], content="Bob comment")
+
+        # Demote Bob to VIEWER
+        demote_res = await self.call(
+            "PATCH",
+            f"/api/v1/workspaces/{self.ws1}/members/{self.uid['bob']}",
+            "alice",
+            json={"role": "VIEWER"},
+        )
+        self.assertEqual(demote_res.status_code, 200)
+
+        # Demoted VIEWER cannot modify or delete own comment -> 403
+        patch_res = await self.call(
+            "PATCH", f"{API}{comment['id']}", "bob", json={"content": "Hacked"}
+        )
+        self.assertEqual(patch_res.status_code, 403)
+        del_res = await self.call("DELETE", f"{API}{comment['id']}", "bob")
+        self.assertEqual(del_res.status_code, 403)
+
+        # Remove Bob from workspace
+        remove_res = await self.call(
+            "DELETE",
+            f"/api/v1/workspaces/{self.ws1}/members/{self.uid['bob']}",
+            "alice",
+        )
+        self.assertEqual(remove_res.status_code, 204)
+
+        # Non-member receives 404
+        non_member_patch = await self.call(
+            "PATCH", f"{API}{comment['id']}", "bob", json={"content": "Hacked"}
+        )
+        self.assertEqual(non_member_patch.status_code, 404)
+        non_member_del = await self.call("DELETE", f"{API}{comment['id']}", "bob")
+        self.assertEqual(non_member_del.status_code, 404)
+
+        # OWNER can still delete the comment (moderation)
+        owner_del = await self.call("DELETE", f"{API}{comment['id']}", "alice")
+        self.assertEqual(owner_del.status_code, 204)
+        self.assertEqual(
+            (await self.call("GET", f"{API}{comment['id']}", "alice")).status_code,
+            404,
+        )
+
+    async def test_delete_task_cascades_comments(self):
+        task = await self.make_task("alice")
+        c1 = await self.make_comment("alice", task_id=task["id"], content="C1")
+        c2 = await self.make_comment("bob", task_id=task["id"], content="C2")
+
+        # Delete task
+        del_task = await self.call("DELETE", f"{TASK_API}{task['id']}", "alice")
+        self.assertEqual(del_task.status_code, 204)
+
+        # Both comments return 404 via API
+        self.assertEqual((await self.call("GET", f"{API}{c1['id']}", "alice")).status_code, 404)
+        self.assertEqual((await self.call("GET", f"{API}{c2['id']}", "alice")).status_code, 404)
+
+        # Directly check database: comments for this task are deleted
+        async with self.sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(Comment).where(Comment.task_id == task["id"])
+                )
+            ).all()
+            self.assertEqual(len(rows), 0)
