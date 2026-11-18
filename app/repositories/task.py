@@ -1,9 +1,11 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import Project, Task, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, UserRole, WorkspaceRole
 from app.repositories.base import BaseRepository
+from app.schemas.pagination import PaginationParams
 
 
 class TaskRepository(BaseRepository[Task]):
@@ -44,11 +46,12 @@ class TaskRepository(BaseRepository[Task]):
         self,
         user: User,
         *,
+        pagination: PaginationParams | None = None,
         project_id: int | None = None,
         page: int = 1,
         limit: int = 20,
     ) -> tuple[list[Task], int]:
-        stmt = select(Task)
+        stmt = select(Task).options(selectinload(Task.labels))
         if user.role != UserRole.ADMIN:
             visible_projects = select(Project.id).where(
                 Project.workspace_id.in_(self.visible_workspace_ids(user.id))
@@ -56,4 +59,6 @@ class TaskRepository(BaseRepository[Task]):
             stmt = stmt.where(Task.project_id.in_(visible_projects))
         if project_id is not None:
             stmt = stmt.where(Task.project_id == project_id)
-        return await self._paginate(stmt, page=page, limit=limit)
+        return await self._paginate(
+            stmt, pagination=pagination, page=page, limit=limit
+        )

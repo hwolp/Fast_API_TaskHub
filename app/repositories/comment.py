@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Comment, Project, Task, User
 from app.models.enums import ProjectStatus, UserRole
 from app.repositories.base import BaseRepository
+from app.schemas.pagination import PaginationParams
 
 
 class CommentRepository(BaseRepository[Comment]):
@@ -27,6 +28,7 @@ class CommentRepository(BaseRepository[Comment]):
         self,
         user: User,
         *,
+        pagination: PaginationParams | None = None,
         task_id: int | None = None,
         page: int = 1,
         limit: int = 20,
@@ -40,4 +42,6 @@ class CommentRepository(BaseRepository[Comment]):
             stmt = stmt.where(Comment.task_id.in_(visible_tasks))
         if task_id is not None:
             stmt = stmt.where(Comment.task_id == task_id)
-        return await self._paginate(stmt, page=page, limit=limit)
+        return await self._paginate(
+            stmt, pagination=pagination, page=page, limit=limit
+        )
