@@ -11,10 +11,14 @@ from app.core.security import decode_token
 from app.models import User
 from app.models.enums import TokenType
 from app.repositories.auth import AuthRepository
+from app.repositories.comment import CommentRepository
+from app.repositories.label import LabelRepository
 from app.repositories.project import ProjectRepository
 from app.repositories.task import TaskRepository
 from app.repositories.workspace import WorkspaceRepository
 from app.services.auth import AuthService
+from app.services.comment import CommentService
+from app.services.label import LabelService
 from app.services.project import ProjectService
 from app.services.task import TaskService
 from app.services.workspace import WorkspaceService
@@ -45,6 +49,14 @@ def get_project_service(session: SessionDep) -> ProjectService:
     return ProjectService(ProjectRepository(session))
 
 
+def get_label_service(session: SessionDep) -> LabelService:
+    return LabelService(LabelRepository(session))
+
+
+def get_comment_service(session: SessionDep) -> CommentService:
+    return CommentService(CommentRepository(session))
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     repository: Annotated[AuthRepository, Depends(get_auth_repository)],
@@ -59,3 +71,9 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
+ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
+LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
+CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]

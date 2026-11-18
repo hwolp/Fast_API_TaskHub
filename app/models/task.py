@@ -76,6 +76,7 @@ class Task(Base):
         secondary="task_labels",
         back_populates="tasks",
         passive_deletes=True,
+        lazy="selectin",
     )
     comments: Mapped[list["Comment"]] = relationship(
         "Comment",

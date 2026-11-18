@@ -43,7 +43,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(tables, TABLES | {"alembic_version"})
                 self.assertEqual(
                     connection.execute("SELECT version_num FROM alembic_version").fetchone(),
-                    ("0002",),
+                    ("0003",),
                 )
                 connection.execute(
                     "INSERT INTO users "
@@ -82,7 +82,7 @@ class MigrationTests(unittest.TestCase):
         for table in TABLES:
             self.assertIn(f"CREATE TABLE {table}", sql)
         self.assertIn("INSERT INTO alembic_version", sql)
-        rollback_sql = self.run_alembic(url, "downgrade", "0002:base", "--sql")
+        rollback_sql = self.run_alembic(url, "downgrade", "0003:base", "--sql")
         for table in TABLES:
             self.assertIn(f"DROP TABLE {table}", rollback_sql)
 

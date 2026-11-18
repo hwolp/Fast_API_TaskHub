@@ -2,12 +2,14 @@ from typing import Any, Generic, TypeVar
 
 from sqlalchemy import Select, func, inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import Base
 from app.models.enums import ProjectStatus, WorkspaceRole
 from app.models.project import Project
 from app.models.task import Task
 from app.models.workspace import Workspace, WorkspaceMember
+from app.schemas.pagination import PaginationParams
 
 ModelT = TypeVar("ModelT", bound=Base)
 
@@ -21,15 +23,22 @@ class BaseRepository(Generic[ModelT]):
         return await self.session.get(self.model, obj_id)
 
     async def _paginate(
-        self, stmt: Select[tuple[ModelT]], *, page: int = 1, limit: int = 20
+        self,
+        stmt: Select[tuple[ModelT]],
+        *,
+        pagination: PaginationParams | None = None,
+        page: int = 1,
+        limit: int = 20,
     ) -> tuple[list[ModelT], int]:
+        p = pagination.page if pagination is not None else page
+        l = pagination.limit if pagination is not None else limit
         total = await self.session.scalar(
             select(func.count()).select_from(stmt.subquery())
         )
         ordered = (
             stmt.order_by(*inspect(self.model).primary_key)
-            .offset((page - 1) * limit)
-            .limit(limit)
+            .offset((p - 1) * l)
+            .limit(l)
         )
         result = await self.session.scalars(ordered)
         return list(result.all()), total or 0
@@ -100,6 +109,7 @@ class BaseRepository(Generic[ModelT]):
         row = (
             await self.session.execute(
                 select(Task, Project.workspace_id, Project.status)
+                .options(selectinload(Task.labels))
                 .join(Project, Task.project_id == Project.id)
                 .where(Task.id == task_id)
             )

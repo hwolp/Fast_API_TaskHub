@@ -1,29 +1,34 @@
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Label, Project, TaskLabel, User
-from app.models.enums import UserRole
+from app.models.enums import ProjectStatus, UserRole
 from app.repositories.base import BaseRepository
+from app.schemas.pagination import PaginationParams
 
 
 class LabelRepository(BaseRepository[Label]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Label, session)
 
-    async def get_with_workspace(self, label_id: int) -> tuple[Label, int] | None:
+    async def get_with_workspace(
+        self, label_id: int
+    ) -> tuple[Label, int, ProjectStatus] | None:
         row = (
             await self.session.execute(
-                select(Label, Project.workspace_id)
+                select(Label, Project.workspace_id, Project.status)
                 .join(Project, Label.project_id == Project.id)
                 .where(Label.id == label_id)
             )
         ).first()
-        return (row[0], row[1]) if row else None
+        return (row[0], row[1], row[2]) if row else None
 
     async def list_visible(
         self,
         user: User,
         *,
+        pagination: PaginationParams | None = None,
         project_id: int | None = None,
         page: int = 1,
         limit: int = 20,
@@ -36,13 +41,19 @@ class LabelRepository(BaseRepository[Label]):
             stmt = stmt.where(Label.project_id.in_(visible_projects))
         if project_id is not None:
             stmt = stmt.where(Label.project_id == project_id)
-        return await self._paginate(stmt, page=page, limit=limit)
+        return await self._paginate(
+            stmt, pagination=pagination, page=page, limit=limit
+        )
 
     async def attach_to_task(self, task_id: int, label_id: int) -> None:
-        existing = await self.session.get(TaskLabel, (task_id, label_id))
-        if existing is None:
-            self.session.add(TaskLabel(task_id=task_id, label_id=label_id))
-            await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                existing = await self.session.get(TaskLabel, (task_id, label_id))
+                if existing is None:
+                    self.session.add(TaskLabel(task_id=task_id, label_id=label_id))
+                    await self.session.flush()
+        except IntegrityError:
+            pass
 
     async def detach_from_task(self, task_id: int, label_id: int) -> bool:
         existing = await self.session.get(TaskLabel, (task_id, label_id))
