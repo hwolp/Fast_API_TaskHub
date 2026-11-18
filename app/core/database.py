@@ -14,7 +14,7 @@ from app.core.config import settings
 
 @event.listens_for(Engine, "connect")
 def _enable_sqlite_fks(dbapi_connection, connection_record) -> None:
-    if dbapi_connection.__class__.__module__.startswith("sqlite3"):
+    if "sqlite" in dbapi_connection.__class__.__module__:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()

@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -38,6 +38,10 @@ class Label(Base):
     name: Mapped[str] = mapped_column(String(LABEL_NAME_MAX_LENGTH), nullable=False)
     color: Mapped[str] = mapped_column(
         String(COLOR_MAX_LENGTH), default="#3B82F6", nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_labels_project_id_name"),
     )
 
     project: Mapped["Project"] = relationship("Project", back_populates="labels")
