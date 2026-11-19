@@ -65,4 +65,4 @@ class ProjectService(ScopedService[ProjectRepository]):
         if not can_delete_project(role):
             raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.delete(project)
-        await self.session.commit()
+        await self.commit_task_list_changes()

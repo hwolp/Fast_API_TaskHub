@@ -67,7 +67,7 @@ class LabelService(ScopedService[LabelRepository]):
             updated = await self.repository.update(
                 scoped.entity, data.model_dump(exclude_unset=True)
             )
-            await self.session.commit()
+            await self.commit_task_list_changes()
             return updated
         except IntegrityError:
             await self.session.rollback()
@@ -79,7 +79,7 @@ class LabelService(ScopedService[LabelRepository]):
             raise ForbiddenError(messages.FORBIDDEN)
         self._ensure_project_active(scoped.project_status)
         await self.repository.delete(scoped.entity)
-        await self.session.commit()
+        await self.commit_task_list_changes()
 
     async def attach_label_to_task(
         self, task_id: int, label_id: int, user: User
@@ -92,7 +92,7 @@ class LabelService(ScopedService[LabelRepository]):
         if label_scoped.entity.project_id != task_scoped.entity.project_id:
             raise BadRequestError(messages.LABEL_PROJECT_MISMATCH)
         await self.repository.attach_to_task(task_id, label_id)
-        await self.session.commit()
+        await self.commit_task_list_changes()
 
     async def detach_label_from_task(
         self, task_id: int, label_id: int, user: User
@@ -107,4 +107,4 @@ class LabelService(ScopedService[LabelRepository]):
         detached = await self.repository.detach_from_task(task_id, label_id)
         if not detached:
             raise NotFoundError(messages.LABEL_NOT_ATTACHED)
-        await self.session.commit()
+        await self.commit_task_list_changes()

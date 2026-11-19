@@ -10,6 +10,7 @@ from app.models.enums import UserRole, WorkspaceRole
 from app.models.project import Project
 from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
+from app.repositories.task import bump_task_list_revision
 
 DEMO_USERS = [
     ("owner@example.com", "Owner User", UserRole.MEMBER, WorkspaceRole.OWNER),
@@ -70,6 +71,7 @@ async def seed() -> None:
             db.add(proj)
             await db.flush()
 
+        await bump_task_list_revision(db)
         await db.commit()
         print(f"Seeded successfully! Demo password for all accounts: {DEMO_PASSWORD}")
         print(f"Workspace ID : {ws.id} (name: {ws.name})")

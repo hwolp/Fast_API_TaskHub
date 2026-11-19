@@ -69,7 +69,7 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         if not can_manage_workspace(role):
             raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.delete(workspace)
-        await self.session.commit()
+        await self.commit_task_list_changes()
 
     async def list_members(
         self, workspace_id: int, user: User
@@ -93,7 +93,7 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         ):
             raise ConflictError(messages.MEMBER_ALREADY_EXISTS)
         member = await self.repository.add_member(workspace_id, data.user_id, data.role)
-        await self.session.commit()
+        await self.commit_task_list_changes()
         return member
 
     async def update_member_role(
@@ -118,7 +118,7 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
                 workspace_id, member_user_id
             )
         updated = await self.repository.update_member(member, data.role)
-        await self.session.commit()
+        await self.commit_task_list_changes()
         return updated
 
     async def remove_member(
@@ -136,4 +136,4 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
             workspace_id, member_user_id
         )
         await self.repository.remove_member(member)
-        await self.session.commit()
+        await self.commit_task_list_changes()

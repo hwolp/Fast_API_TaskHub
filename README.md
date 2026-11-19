@@ -110,6 +110,18 @@ Với client trình duyệt, giữ access token trong bộ nhớ; refresh token 
 qua BFF/cookie HttpOnly, Secure với bảo vệ CSRF. Các endpoint hiện tại nhận và trả
 token bằng JSON, không tự đặt cookie.
 
+## Cache danh sách task
+
+Chạy `python -m alembic upgrade head` để tạo bảng phiên bản cache. Đặt
+`REDIS_URL=redis://localhost:6379/0` trong `.env` để bật cache cho
+`GET /api/v1/tasks/`. Dùng `TASK_LIST_CACHE_TTL_SECONDS` để đổi TTL mặc định
+60 giây. Để trống `REDIS_URL` để chạy trực tiếp với DB.
+
+Ứng dụng đọc quyền người dùng và phiên bản cache từ DB. Các thao tác thay đổi
+task, nhãn, quyền workspace hoặc xóa project/workspace cập nhật phiên bản trong
+cùng giao dịch DB. Mọi trang cache cũ tự hết hạn theo TTL. Khi Redis gặp lỗi,
+API danh sách lấy kết quả từ DB.
+
 ## Migration và kiểm thử
 
 Database đang ở `0001` chỉ cần chạy `python -m alembic upgrade head` để thêm bảng

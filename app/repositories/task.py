@@ -1,16 +1,33 @@
-from sqlalchemy import select
+from uuid import uuid4
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import Project, Task, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, UserRole, WorkspaceRole
+from app.models.task import TaskListRevision
 from app.repositories.base import BaseRepository
 from app.schemas.pagination import PaginationParams
+
+
+async def bump_task_list_revision(session: AsyncSession) -> None:
+    await session.execute(
+        update(TaskListRevision)
+        .where(TaskListRevision.id == 1)
+        .values(version=uuid4().hex)
+    )
 
 
 class TaskRepository(BaseRepository[Task]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Task, session)
+
+    async def list_revision(self) -> str:
+        result = await self.session.execute(
+            select(TaskListRevision.version).where(TaskListRevision.id == 1)
+        )
+        return result.scalar_one()
 
     async def get_with_workspace(
         self, task_id: int

@@ -9,19 +9,22 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.core.cache import RedisCache
 from app.core.database import get_db
 from app.core.security import create_token, read_key
 from app.main import app
 from app.models import Project, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
+from app.repositories.task import TaskRepository
 
 ROOT = Path(__file__).resolve().parents[1]
 API = "/api/v1/tasks/"
@@ -213,6 +216,94 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         outsider = await self.call("GET", API, "erin")  # member of ws1 only
         self.assertEqual(outsider.json()["total"], 3)
         self.assertEqual((await self.call("GET", API + "?limit=0", "root")).status_code, 422)
+
+    def install_task_cache(self):
+        cache = RedisCache("redis://localhost:6379/0", 60)
+        self.addAsyncCleanup(cache.close)
+        values = {}
+        redis = AsyncMock(wraps=cache.client)
+        redis.get.side_effect = values.get
+
+        def set_value(key, payload, *, ex):
+            values[key] = payload.encode()
+            self.assertEqual(ex, 60)
+
+        redis.set.side_effect = set_value
+        cache.client = redis
+        patcher = patch.object(app.state, "cache", cache, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return redis, values
+
+    async def test_task_list_cache_reuses_pages_and_isolates_users(self):
+        redis, values = self.install_task_cache()
+        visible = await self.make_task("alice")
+        hidden = await self.make_task("dave", project=self.p2)
+        query = f"{API}?project_id={self.p1}&limit=1"
+        first = await self.call("GET", query, "carol")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["items"][0]["id"], visible["id"])
+        with patch.object(
+            TaskRepository, "list_visible", side_effect=AssertionError("cache miss")
+        ):
+            cached = await self.call("GET", query, "carol")
+            self.assertEqual(cached.json(), first.json())
+        redis.set.assert_awaited_once()
+
+        second = await self.call("GET", query + "&page=2", "carol")
+        self.assertEqual(second.json(), {"items": [], "total": 1})
+        other = await self.call("GET", query, "dave")
+        self.assertEqual(other.json(), {"items": [], "total": 0})
+        unfiltered = await self.call("GET", f"{API}?limit=1", "dave")
+        self.assertEqual(unfiltered.json()["items"][0]["id"], hidden["id"])
+        self.assertEqual(len(values), 4)
+
+        key = redis.get.await_args_list[0].args[0]
+        values[key] = b"invalid JSON"
+        recovered = await self.call("GET", query, "carol")
+        self.assertEqual(recovered.json(), first.json())
+        self.assertNotEqual(values[key], b"invalid JSON")
+
+    async def test_task_list_cache_fallback_tracks_mutations_and_revocation(self):
+        redis, _ = self.install_task_cache()
+        task = await self.make_task("alice")
+        original = await self.call("GET", API, "carol")
+        self.assertEqual(original.json()["total"], 1)
+        read, write = redis.get.side_effect, redis.set.side_effect
+        redis.get.side_effect = RedisConnectionError("offline")
+        redis.set.side_effect = RedisConnectionError("offline")
+
+        updated = await self.call(
+            "PATCH", f"{API}{task['id']}", "alice", json={"title": "Updated"}
+        )
+        self.assertEqual(updated.status_code, 200)
+        with self.assertLogs("app.core.cache", level="WARNING"):
+            fallback = await self.call("GET", API, "carol")
+        self.assertEqual(fallback.json()["items"][0]["title"], "Updated")
+
+        redis.get.side_effect = read
+        redis.set.side_effect = write
+        label = await self.call(
+            "POST", "/api/v1/labels/", "alice",
+            json={"project_id": self.p1, "name": "Urgent"},
+        )
+        self.assertEqual(label.status_code, 201)
+        attach = await self.call(
+            "POST", f"{API}{task['id']}/labels/{label.json()['id']}", "alice"
+        )
+        self.assertEqual(attach.status_code, 204)
+        labeled = await self.call("GET", API, "carol")
+        self.assertEqual(labeled.json()["items"][0]["title"], "Updated")
+        self.assertEqual(labeled.json()["items"][0]["labels"][0]["name"], "Urgent")
+
+        removed = await self.call(
+            "DELETE",
+            f"/api/v1/workspaces/{self.ws1}/members/{self.uid['carol']}",
+            "alice"
+        )
+        self.assertEqual(removed.status_code, 204)
+        after = await self.call("GET", API, "carol")
+        self.assertEqual(after.json(), {"items": [], "total": 0})
 
     async def test_null_for_required_fields_is_a_422_not_a_500(self):
         task = await self.make_task("alice")
