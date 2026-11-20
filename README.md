@@ -4,6 +4,28 @@ TaskHub là hệ thống backend quản lý công việc và dự án, được 
 
 ---
 
+## Chạy với Docker Compose
+
+Từ thư mục gốc, dùng Docker Compose v2 để khởi động FastAPI, MySQL và Redis.
+
+```powershell
+docker compose up
+```
+
+Compose cấu hình kết nối giữa các dịch vụ. App đợi MySQL và Redis sẵn sàng, tạo cặp khóa JWT trong volume nếu cần, rồi chạy migration Alembic trước khi mở API. Cấu hình dùng mật khẩu MySQL dành cho môi trường local.
+
+Mở Swagger tại `http://localhost:8000/docs` hoặc kiểm tra trạng thái tại `http://localhost:8000/healthy`. Dùng terminal thứ hai để xem trạng thái và log.
+
+Nếu cổng `8000` đã được dùng, thêm `TASKHUB_PORT=8001` vào `.env` để mở app tại cổng `8001`.
+
+```powershell
+docker compose ps
+docker compose logs -f app
+docker compose exec app python -m alembic current
+```
+
+Dùng `docker compose up --build` sau khi thay đổi mã nguồn hoặc thư viện. Dừng stack bằng `docker compose down`. Dữ liệu MySQL và khóa JWT được giữ trong named volumes cho lần chạy sau.
+
 # Cấu trúc thư mục
 
 ```text

@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!requirements.txt
+!app/
+!app/**
+!alembic/
+!alembic/**
+!alembic.ini
+!scripts/
+!scripts/generate_auth_keys.py
+**/__pycache__/
+**/*.py[cod]
