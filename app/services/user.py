@@ -12,6 +12,7 @@ from app.core.permissions import (
     can_view_user,
 )
 from app.models import User
+from app.repositories.task import bump_task_list_revision
 from app.repositories.user import UserRepository
 from app.schemas.user import UserUpdate
 
@@ -63,6 +64,7 @@ class UserService:
         target = await self._get_or_404(user_id)
         try:
             await self.repository.delete(target)
+            await bump_task_list_revision(self.session)
             await self.session.commit()
         except IntegrityError:
             await self.session.rollback()

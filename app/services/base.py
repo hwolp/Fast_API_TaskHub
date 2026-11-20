@@ -6,6 +6,7 @@ from app.core.permissions import effective_role
 from app.models import User
 from app.models.enums import ProjectStatus, WorkspaceRole
 from app.repositories.base import BaseRepository
+from app.repositories.task import bump_task_list_revision
 
 RepoT = TypeVar("RepoT", bound=BaseRepository)
 EntityT = TypeVar("EntityT")
@@ -28,6 +29,11 @@ class ScopedService(Generic[RepoT]):
     def __init__(self, repository: RepoT) -> None:
         self.repository = repository
         self.session = repository.session
+
+    async def commit_task_list_changes(self) -> None:
+        # Change the cache namespace atomically with the data and permission changes.
+        await bump_task_list_revision(self.session)
+        await self.session.commit()
 
     def _ensure_project_active(self, status: ProjectStatus) -> None:
         if status == ProjectStatus.ARCHIVED:

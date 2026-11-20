@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, gt=0)
     DATABASE_URL: str
+    REDIS_URL: str = ""
+    TASK_LIST_CACHE_TTL_SECONDS: int = Field(default=60, gt=0)
 
     @field_validator("DEBUG", mode="before")
     @classmethod

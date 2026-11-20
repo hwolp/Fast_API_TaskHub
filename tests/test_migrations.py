@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TABLES = {
     "users", "workspaces", "workspace_members", "projects",
     "tasks", "labels", "task_labels", "comments", "refresh_tokens",
+    "task_list_revision",
 }
 
 
@@ -33,6 +34,15 @@ class MigrationTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             database = Path(directory) / "migration.db"
             url = f"sqlite+aiosqlite:///{database.as_posix()}"
+            self.run_alembic(url, "upgrade", "0003")
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute(
+                    "INSERT INTO users "
+                    "(email, full_name, hashed_password, role, is_active, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ("migration@example.com", "Migration", "test", "MEMBER", 1,
+                     "2026-01-01 00:00:00"),
+                )
             self.run_alembic(url, "upgrade", "head")
             with closing(sqlite3.connect(database)) as connection, connection:
                 tables = {
@@ -43,15 +53,12 @@ class MigrationTests(unittest.TestCase):
                 self.assertEqual(tables, TABLES | {"alembic_version"})
                 self.assertEqual(
                     connection.execute("SELECT version_num FROM alembic_version").fetchone(),
-                    ("0003",),
+                    ("0004",),
                 )
-                connection.execute(
-                    "INSERT INTO users "
-                    "(email, full_name, hashed_password, role, is_active, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    ("migration@example.com", "Migration", "test", "MEMBER", 1,
-                     "2026-01-01 00:00:00"),
-                )
+                revision = connection.execute(
+                    "SELECT version FROM task_list_revision WHERE id = 1"
+                ).fetchone()
+                self.assertEqual(len(revision[0]), 32)
             self.run_alembic(url, "check")
             self.run_alembic(url, "upgrade", "head")
             with closing(sqlite3.connect(database)) as connection, connection:
@@ -82,7 +89,7 @@ class MigrationTests(unittest.TestCase):
         for table in TABLES:
             self.assertIn(f"CREATE TABLE {table}", sql)
         self.assertIn("INSERT INTO alembic_version", sql)
-        rollback_sql = self.run_alembic(url, "downgrade", "0003:base", "--sql")
+        rollback_sql = self.run_alembic(url, "downgrade", "0004:base", "--sql")
         for table in TABLES:
             self.assertIn(f"DROP TABLE {table}", rollback_sql)
 

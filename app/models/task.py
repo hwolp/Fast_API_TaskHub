@@ -84,3 +84,10 @@ class Task(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class TaskListRevision(Base):
+    __tablename__ = "task_list_revision"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)

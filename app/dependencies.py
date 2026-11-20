@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import messages
+from app.core.cache import RedisCache
 from app.core.database import get_db
 from app.core.exceptions import UnauthorizedError
 from app.core.security import decode_token
@@ -37,8 +38,9 @@ def get_auth_service(
     return AuthService(repository)
 
 
-def get_task_service(session: SessionDep) -> TaskService:
-    return TaskService(TaskRepository(session))
+def get_task_service(request: Request, session: SessionDep) -> TaskService:
+    cache: RedisCache | None = getattr(request.app.state, "cache", None)
+    return TaskService(TaskRepository(session), cache=cache)
 
 
 def get_workspace_service(session: SessionDep) -> WorkspaceService:

@@ -4,6 +4,28 @@ TaskHub là hệ thống backend quản lý công việc và dự án, được 
 
 ---
 
+## Chạy với Docker Compose
+
+Từ thư mục gốc, dùng Docker Compose v2 để khởi động FastAPI, MySQL và Redis.
+
+```powershell
+docker compose up
+```
+
+Compose cấu hình kết nối giữa các dịch vụ. App đợi MySQL và Redis sẵn sàng, tạo cặp khóa JWT trong volume nếu cần, rồi chạy migration Alembic trước khi mở API. Cấu hình dùng mật khẩu MySQL dành cho môi trường local.
+
+Mở Swagger tại `http://localhost:8000/docs` hoặc kiểm tra trạng thái tại `http://localhost:8000/healthy`. Dùng terminal thứ hai để xem trạng thái và log.
+
+Nếu cổng `8000` đã được dùng, thêm `TASKHUB_PORT=8001` vào `.env` để mở app tại cổng `8001`.
+
+```powershell
+docker compose ps
+docker compose logs -f app
+docker compose exec app python -m alembic current
+```
+
+Dùng `docker compose up --build` sau khi thay đổi mã nguồn hoặc thư viện. Dừng stack bằng `docker compose down`. Dữ liệu MySQL và khóa JWT được giữ trong named volumes cho lần chạy sau.
+
 # Cấu trúc thư mục
 
 ```text
@@ -109,6 +131,18 @@ vẫn giữ hành vi truy cập cũ; dùng `Depends(get_current_user)` từ
 Với client trình duyệt, giữ access token trong bộ nhớ; refresh token nên được xử lý
 qua BFF/cookie HttpOnly, Secure với bảo vệ CSRF. Các endpoint hiện tại nhận và trả
 token bằng JSON, không tự đặt cookie.
+
+## Cache danh sách task
+
+Chạy `python -m alembic upgrade head` để tạo bảng phiên bản cache. Đặt
+`REDIS_URL=redis://localhost:6379/0` trong `.env` để bật cache cho
+`GET /api/v1/tasks/`. Dùng `TASK_LIST_CACHE_TTL_SECONDS` để đổi TTL mặc định
+60 giây. Để trống `REDIS_URL` để chạy trực tiếp với DB.
+
+Ứng dụng đọc quyền người dùng và phiên bản cache từ DB. Các thao tác thay đổi
+task, nhãn, quyền workspace hoặc xóa project/workspace cập nhật phiên bản trong
+cùng giao dịch DB. Mọi trang cache cũ tự hết hạn theo TTL. Khi Redis gặp lỗi,
+API danh sách lấy kết quả từ DB.
 
 ## Migration và kiểm thử
 
