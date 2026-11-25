@@ -18,13 +18,20 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.core.cache import TASK_LIST_CACHE_PREFIX, RedisCache
+from app.core.cache import (
+    TASK_LIST_CACHE_PREFIX,
+    RedisCache,
+    TaskListCacheInvalidator,
+    workspace_version_key,
+)
 from app.core.database import get_db
 from app.core.security import create_token, read_key
 from app.main import app
 from app.models import Project, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
 from app.repositories.task import TaskRepository
+from app.repositories.user import UserRepository
+from app.services.user import UserService
 
 ROOT = Path(__file__).resolve().parents[1]
 API = "/api/v1/tasks/"
@@ -288,19 +295,32 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher.stop)
         return redis, values, state
 
-    async def test_task_list_cache_reuses_pages_and_isolates_users(self):
+    async def assert_cache_warm(self, query: str, user: str) -> dict:
+        first = await self.call("GET", query, user)
+        self.assertEqual(first.status_code, 200, first.text)
+        body = first.json()
+        return await self.assert_cache_hit(query, user, expected=body)
+
+    async def assert_cache_hit(
+        self, query: str, user: str, expected: dict | None = None
+    ) -> dict:
+        with patch.object(
+            TaskRepository, "list_visible", side_effect=AssertionError("cache miss")
+        ):
+            res = await self.call("GET", query, user)
+        self.assertEqual(res.status_code, 200, res.text)
+        body = res.json()
+        if expected is not None:
+            self.assertEqual(body, expected)
+        return body
+
+    async def test_task_list_cache_reuses_pages_isolates_users_and_workspaces(self):
         redis, values, _ = self.install_task_cache()
         visible = await self.make_task("alice")
         hidden = await self.make_task("dave", project=self.p2)
         query = f"{API}?project_id={self.p1}&limit=1"
-        first = await self.call("GET", query, "carol")
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(first.json()["items"][0]["id"], visible["id"])
-        with patch.object(
-            TaskRepository, "list_visible", side_effect=AssertionError("cache miss")
-        ):
-            cached = await self.call("GET", query, "carol")
-            self.assertEqual(cached.json(), first.json())
+        first = await self.assert_cache_warm(query, "carol")
+        self.assertEqual(first["items"][0]["id"], visible["id"])
         redis.set.assert_awaited_once()
 
         second = await self.call("GET", query + "&page=2", "carol")
@@ -312,49 +332,302 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         page_keys = [k for k in values if k.startswith(TASK_LIST_CACHE_PREFIX)]
         self.assertEqual(len(page_keys), 4)
 
+        # Corrupted JSON payload recovers from DB and rewrites cache
         key = redis.mget.await_args_list[0].args[0][0]
         values[key] = b"invalid JSON"
         recovered = await self.call("GET", query, "carol")
-        self.assertEqual(recovered.json(), first.json())
+        self.assertEqual(recovered.json(), first)
         self.assertNotEqual(values[key], b"invalid JSON")
 
-    async def test_task_list_cache_fallback_tracks_mutations_and_revocation(self):
-        _, _, state = self.install_task_cache()
-        task = await self.make_task("alice")
-        original = await self.call("GET", API, "carol")
-        self.assertEqual(original.json()["total"], 1)
-        state["offline"] = True
+        # Cross-workspace isolation: mutating ws1 must not evict dave's ws2 cache
+        await self.assert_cache_warm(API, "carol")
+        dave_before = await self.assert_cache_warm(API, "dave")
+        patch_ws1 = await self.call(
+            "PATCH", f"{API}{visible['id']}", "alice", json={"title": "WS1 Updated"}
+        )
+        self.assertEqual(patch_ws1.status_code, 200)
+        carol_after = await self.call("GET", API, "carol")
+        self.assertEqual(carol_after.json()["items"][0]["title"], "WS1 Updated")
+        await self.assert_cache_hit(API, "dave", expected=dave_before)
 
-        updated = await self.call(
-            "PATCH", f"{API}{task['id']}", "alice", json={"title": "Updated"}
-        )
-        self.assertEqual(updated.status_code, 200)
-        with self.assertLogs("app.core.cache", level="WARNING"):
-            fallback = await self.call("GET", API, "carol")
-        self.assertEqual(fallback.json()["items"][0]["title"], "Updated")
+        # Evicted version key safely triggers cache miss and re-warms cache
+        values.pop(workspace_version_key(self.ws1))
+        after_evict = await self.call("GET", API, "carol")
+        self.assertEqual(after_evict.status_code, 200)
+        self.assertEqual(after_evict.json()["items"][0]["title"], "WS1 Updated")
+        self.assertIn(workspace_version_key(self.ws1), values)
+        await self.assert_cache_hit(API, "carol", expected=after_evict.json())
 
-        state["offline"] = False
-        label = await self.call(
-            "POST", "/api/v1/labels/", "alice",
-            json={"project_id": self.p1, "name": "Urgent"},
-        )
-        self.assertEqual(label.status_code, 201)
-        attach = await self.call(
-            "POST", f"{API}{task['id']}/labels/{label.json()['id']}", "alice"
-        )
-        self.assertEqual(attach.status_code, 204)
-        labeled = await self.call("GET", API, "carol")
-        self.assertEqual(labeled.json()["items"][0]["title"], "Updated")
-        self.assertEqual(labeled.json()["items"][0]["labels"][0]["name"], "Urgent")
+    async def test_warm_cache_invalidated_by_task_and_label_mutations(self):
+        self.install_task_cache()
 
-        removed = await self.call(
-            "DELETE",
-            f"/api/v1/workspaces/{self.ws1}/members/{self.uid['carol']}",
-            "alice"
-        )
-        self.assertEqual(removed.status_code, 204)
-        after = await self.call("GET", API, "carol")
-        self.assertEqual(after.json(), {"items": [], "total": 0})
+        with self.subTest("create_task"):
+            self.assertEqual(
+                await self.assert_cache_warm(API, "carol"), {"items": [], "total": 0}
+            )
+            self.assertEqual(
+                await self.assert_cache_warm(API, "root"), {"items": [], "total": 0}
+            )
+            task1 = await self.make_task("alice", title="T1")
+            self.assertEqual(
+                (await self.call("GET", API, "carol")).json()["items"][0]["title"],
+                "T1",
+            )
+            self.assertEqual(
+                (await self.call("GET", API, "root")).json()["items"][0]["title"],
+                "T1",
+            )
+
+        with self.subTest("update_task"):
+            await self.assert_cache_warm(API, "carol")
+            await self.assert_cache_warm(API, "root")
+            upd = await self.call(
+                "PATCH", f"{API}{task1['id']}", "alice", json={"title": "T1-Edited"}
+            )
+            self.assertEqual(upd.status_code, 200)
+            self.assertEqual(
+                (await self.call("GET", API, "carol")).json()["items"][0]["title"],
+                "T1-Edited",
+            )
+            self.assertEqual(
+                (await self.call("GET", API, "root")).json()["items"][0]["title"],
+                "T1-Edited",
+            )
+
+        with self.subTest("attach_label_to_task"):
+            label_res = await self.call(
+                "POST",
+                "/api/v1/labels/",
+                "alice",
+                json={"project_id": self.p1, "name": "Urgent"},
+            )
+            self.assertEqual(label_res.status_code, 201)
+            label_id = label_res.json()["id"]
+            # Warm cache AFTER creating label and immediately BEFORE attaching it
+            warm_before_attach = await self.assert_cache_warm(API, "carol")
+            self.assertEqual(warm_before_attach["items"][0]["labels"], [])
+            attach = await self.call(
+                "POST", f"{API}{task1['id']}/labels/{label_id}", "alice"
+            )
+            self.assertEqual(attach.status_code, 204)
+            after_attach = (await self.call("GET", API, "carol")).json()
+            self.assertEqual(
+                [lbl["name"] for lbl in after_attach["items"][0]["labels"]],
+                ["Urgent"],
+            )
+
+        with self.subTest("update_label"):
+            await self.assert_cache_warm(API, "carol")
+            upd_lbl = await self.call(
+                "PATCH", f"/api/v1/labels/{label_id}", "alice", json={"name": "Critical"}
+            )
+            self.assertEqual(upd_lbl.status_code, 200)
+            after_upd_lbl = (await self.call("GET", API, "carol")).json()
+            self.assertEqual(
+                [lbl["name"] for lbl in after_upd_lbl["items"][0]["labels"]],
+                ["Critical"],
+            )
+
+        with self.subTest("detach_label_from_task"):
+            await self.assert_cache_warm(API, "carol")
+            detach = await self.call(
+                "DELETE", f"{API}{task1['id']}/labels/{label_id}", "alice"
+            )
+            self.assertEqual(detach.status_code, 204)
+            after_detach = (await self.call("GET", API, "carol")).json()
+            self.assertEqual(after_detach["items"][0]["labels"], [])
+
+        with self.subTest("delete_label"):
+            reattach = await self.call(
+                "POST", f"{API}{task1['id']}/labels/{label_id}", "alice"
+            )
+            self.assertEqual(reattach.status_code, 204)
+            warm_before_del_lbl = await self.assert_cache_warm(API, "carol")
+            self.assertEqual(
+                [lbl["name"] for lbl in warm_before_del_lbl["items"][0]["labels"]],
+                ["Critical"],
+            )
+            del_lbl = await self.call("DELETE", f"/api/v1/labels/{label_id}", "alice")
+            self.assertEqual(del_lbl.status_code, 204)
+            after_del_lbl = (await self.call("GET", API, "carol")).json()
+            self.assertEqual(after_del_lbl["items"][0]["labels"], [])
+
+        with self.subTest("delete_task"):
+            await self.assert_cache_warm(API, "carol")
+            await self.assert_cache_warm(API, "root")
+            del_task = await self.call("DELETE", f"{API}{task1['id']}", "alice")
+            self.assertEqual(del_task.status_code, 204)
+            self.assertEqual(
+                (await self.call("GET", API, "carol")).json(), {"items": [], "total": 0}
+            )
+            self.assertEqual(
+                (await self.call("GET", API, "root")).json(), {"items": [], "total": 0}
+            )
+
+    async def test_warm_cache_invalidated_by_membership_project_workspace_and_user_mutations(self):
+        self.install_task_cache()
+        ws_api = "/api/v1/workspaces/"
+
+        with self.subTest("update_member_role"):
+            await self.make_task("alice", assignee_id=self.uid["bob"])
+            warm_carol = await self.assert_cache_warm(API, "carol")
+            self.assertEqual(warm_carol["items"][0]["assignee_id"], self.uid["bob"])
+            warm_root = await self.assert_cache_warm(API, "root")
+            self.assertEqual(warm_root["items"][0]["assignee_id"], self.uid["bob"])
+            demote = await self.call(
+                "PATCH",
+                f"{ws_api}{self.ws1}/members/{self.uid['bob']}",
+                "alice",
+                json={"role": "VIEWER"},
+            )
+            self.assertEqual(demote.status_code, 200)
+            self.assertIsNone(
+                (await self.call("GET", API, "carol")).json()["items"][0]["assignee_id"]
+            )
+            self.assertIsNone(
+                (await self.call("GET", API, "root")).json()["items"][0]["assignee_id"]
+            )
+
+        with self.subTest("delete_user"):
+            task_erin = await self.make_task("alice", assignee_id=self.uid["erin"])
+            warm_alice = await self.assert_cache_warm(f"{API}?limit=20", "alice")
+            warm_by_id = {item["id"]: item for item in warm_alice["items"]}
+            self.assertEqual(
+                warm_by_id[task_erin["id"]]["assignee_id"], self.uid["erin"]
+            )
+            async with self.sessions() as session:
+                root_user = await session.get(User, self.uid["root"])
+                self.assertIsNotNone(root_user)
+                await UserService(
+                    UserRepository(session),
+                    task_cache_invalidator=TaskListCacheInvalidator(app.state.cache),
+                ).delete_user(self.uid["erin"], root_user)
+            after_del_user = (await self.call("GET", f"{API}?limit=20", "alice")).json()
+            after_by_id = {item["id"]: item for item in after_del_user["items"]}
+            self.assertIsNone(after_by_id[task_erin["id"]]["assignee_id"])
+
+        with self.subTest("add_member"):
+            dave_query = f"{API}?project_id={self.p1}"
+            self.assertEqual((await self.assert_cache_warm(dave_query, "dave"))["total"], 0)
+            add_res = await self.call(
+                "POST",
+                f"{ws_api}{self.ws1}/members",
+                "alice",
+                json={"user_id": self.uid["dave"], "role": "VIEWER"},
+            )
+            self.assertEqual(add_res.status_code, 201)
+            self.assertEqual((await self.call("GET", dave_query, "dave")).json()["total"], 2)
+
+        with self.subTest("remove_member"):
+            self.assertEqual((await self.assert_cache_warm(API, "carol"))["total"], 2)
+            rem_res = await self.call(
+                "DELETE", f"{ws_api}{self.ws1}/members/{self.uid['carol']}", "alice"
+            )
+            self.assertEqual(rem_res.status_code, 204)
+            self.assertEqual(
+                (await self.call("GET", API, "carol")).json(), {"items": [], "total": 0}
+            )
+
+        with self.subTest("delete_project"):
+            p_extra = await self.call(
+                "POST",
+                "/api/v1/projects/",
+                "alice",
+                json={"workspace_id": self.ws1, "name": "Extra"},
+            )
+            self.assertEqual(p_extra.status_code, 201)
+            p_extra_id = p_extra.json()["id"]
+            await self.make_task("alice", project=p_extra_id)
+            p_extra_query = f"{API}?project_id={p_extra_id}"
+            self.assertEqual(
+                (await self.assert_cache_warm(p_extra_query, "alice"))["total"], 1
+            )
+            del_proj = await self.call(
+                "DELETE", f"/api/v1/projects/{p_extra_id}", "alice"
+            )
+            self.assertEqual(del_proj.status_code, 204)
+            self.assertEqual(
+                (await self.call("GET", p_extra_query, "alice")).json(),
+                {"items": [], "total": 0},
+            )
+
+        with self.subTest("delete_workspace"):
+            self.assertEqual((await self.assert_cache_warm(API, "alice"))["total"], 2)
+            self.assertEqual((await self.assert_cache_warm(API, "root"))["total"], 2)
+            del_ws = await self.call("DELETE", f"{ws_api}{self.ws1}", "alice")
+            self.assertEqual(del_ws.status_code, 204)
+            self.assertEqual(
+                (await self.call("GET", API, "alice")).json(), {"items": [], "total": 0}
+            )
+            self.assertEqual((await self.call("GET", API, "root")).json()["total"], 0)
+
+        with self.subTest("create_workspace"):
+            self.assertEqual(
+                await self.assert_cache_warm(API, "carol"), {"items": [], "total": 0}
+            )
+            ws_new = await self.call("POST", ws_api, "carol", json={"name": "Carol WS"})
+            self.assertEqual(ws_new.status_code, 201)
+            p_new = await self.call(
+                "POST",
+                "/api/v1/projects/",
+                "carol",
+                json={"workspace_id": ws_new.json()["id"], "name": "Carol P"},
+            )
+            self.assertEqual(p_new.status_code, 201)
+            t_new = await self.make_task("carol", project=p_new.json()["id"])
+            after_ws = (await self.call("GET", API, "carol")).json()
+            self.assertEqual(after_ws["total"], 1)
+            self.assertEqual(after_ws["items"][0]["id"], t_new["id"])
+
+    async def test_task_list_cache_fail_open_and_disabled_noop(self):
+        with self.subTest("cache_disabled_noop"):
+            with patch.object(app.state, "cache", None, create=True):
+                t_no_cache = await self.make_task("alice")
+                listed = await self.call("GET", API, "carol")
+                self.assertEqual((listed.status_code, listed.json()["total"]), (200, 1))
+                patched = await self.call(
+                    "PATCH",
+                    f"{API}{t_no_cache['id']}",
+                    "alice",
+                    json={"title": "NoCache"},
+                )
+                self.assertEqual(
+                    (patched.status_code, patched.json()["title"]), (200, "NoCache")
+                )
+                self.assertEqual(
+                    (await self.call("DELETE", f"{API}{t_no_cache['id']}", "alice")).status_code,
+                    204,
+                )
+                self.assertEqual((await self.call("GET", API, "carol")).json()["total"], 0)
+
+        with self.subTest("redis_offline_fail_open"):
+            _, _, state = self.install_task_cache()
+            task = await self.make_task("alice")
+            await self.assert_cache_warm(API, "carol")
+            state["offline"] = True
+
+            with self.assertLogs("app.core.cache", level="WARNING"):
+                updated = await self.call(
+                    "PATCH", f"{API}{task['id']}", "alice", json={"title": "Offline Updated"}
+                )
+            self.assertEqual(updated.status_code, 200)
+            with self.assertLogs("app.core.cache", level="WARNING"):
+                fallback = await self.call("GET", API, "carol")
+            self.assertEqual(fallback.status_code, 200)
+            self.assertEqual(fallback.json()["items"][0]["title"], "Offline Updated")
+
+            state["offline"] = False
+            self.assertEqual(
+                (
+                    await self.call(
+                        "PATCH", f"{API}{task['id']}", "alice", json={"title": "Recovered"}
+                    )
+                ).status_code,
+                200,
+            )
+            recovered = await self.call("GET", API, "carol")
+            self.assertEqual(recovered.json()["items"][0]["title"], "Recovered")
+            await self.assert_cache_hit(API, "carol", expected=recovered.json())
 
     async def test_null_for_required_fields_is_a_422_not_a_500(self):
         task = await self.make_task("alice")
