@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import messages
-from app.core.cache import RedisCache
+from app.core.cache import RedisCache, TaskListCacheInvalidator
 from app.core.database import get_db
 from app.core.exceptions import UnauthorizedError
 from app.core.security import decode_token
@@ -38,21 +38,52 @@ def get_auth_service(
     return AuthService(repository)
 
 
-def get_task_service(request: Request, session: SessionDep) -> TaskService:
-    cache: RedisCache | None = getattr(request.app.state, "cache", None)
-    return TaskService(TaskRepository(session), cache=cache)
+def get_task_cache(request: Request) -> RedisCache | None:
+    return getattr(request.app.state, "cache", None)
 
 
-def get_workspace_service(session: SessionDep) -> WorkspaceService:
-    return WorkspaceService(WorkspaceRepository(session))
+TaskCacheDep = Annotated[RedisCache | None, Depends(get_task_cache)]
 
 
-def get_project_service(session: SessionDep) -> ProjectService:
-    return ProjectService(ProjectRepository(session))
+def get_task_list_invalidator(cache: TaskCacheDep) -> TaskListCacheInvalidator:
+    return TaskListCacheInvalidator(cache)
 
 
-def get_label_service(session: SessionDep) -> LabelService:
-    return LabelService(LabelRepository(session))
+TaskListInvalidatorDep = Annotated[
+    TaskListCacheInvalidator, Depends(get_task_list_invalidator)
+]
+
+
+def get_task_service(
+    session: SessionDep,
+    cache: TaskCacheDep,
+    invalidator: TaskListInvalidatorDep,
+) -> TaskService:
+    return TaskService(
+        TaskRepository(session), cache=cache, task_cache_invalidator=invalidator
+    )
+
+
+def get_workspace_service(
+    session: SessionDep, invalidator: TaskListInvalidatorDep
+) -> WorkspaceService:
+    return WorkspaceService(
+        WorkspaceRepository(session), task_cache_invalidator=invalidator
+    )
+
+
+def get_project_service(
+    session: SessionDep, invalidator: TaskListInvalidatorDep
+) -> ProjectService:
+    return ProjectService(
+        ProjectRepository(session), task_cache_invalidator=invalidator
+    )
+
+
+def get_label_service(
+    session: SessionDep, invalidator: TaskListInvalidatorDep
+) -> LabelService:
+    return LabelService(LabelRepository(session), task_cache_invalidator=invalidator)
 
 
 def get_comment_service(session: SessionDep) -> CommentService:

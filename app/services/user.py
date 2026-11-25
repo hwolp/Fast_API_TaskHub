@@ -1,6 +1,7 @@
 from sqlalchemy.exc import IntegrityError
 
 from app.core import messages
+from app.core.cache import TaskListCacheInvalidator
 from app.core.exceptions import (
     BadRequestError,
     ForbiddenError,
@@ -12,15 +13,22 @@ from app.core.permissions import (
     can_view_user,
 )
 from app.models import User
-from app.repositories.task import bump_task_list_revision
 from app.repositories.user import UserRepository
 from app.schemas.user import UserUpdate
 
 
 class UserService:
-    def __init__(self, repository: UserRepository) -> None:
+    def __init__(
+        self,
+        repository: UserRepository,
+        *,
+        task_cache_invalidator: TaskListCacheInvalidator | None = None,
+    ) -> None:
         self.repository = repository
         self.session = repository.session
+        self.task_cache_invalidator = (
+            task_cache_invalidator or TaskListCacheInvalidator()
+        )
 
     async def _get_or_404(self, user_id: int) -> User:
         target = await self.repository.get(user_id)
@@ -62,12 +70,19 @@ class UserService:
         if actor.id == user_id:
             raise BadRequestError(messages.CANNOT_DELETE_OWN_ACCOUNT)
         target = await self._get_or_404(user_id)
+        affected_workspace_ids = (
+            await self.repository.list_assigned_task_workspace_ids(user_id)
+        )
         try:
             await self.repository.delete(target)
-            await bump_task_list_revision(self.session)
             await self.session.commit()
         except IntegrityError:
             await self.session.rollback()
             raise BadRequestError(
                 messages.CANNOT_DELETE_USER_WITH_DEPENDENCIES
             ) from None
+        await self.task_cache_invalidator.invalidate(
+            workspace_ids=affected_workspace_ids,
+            user_ids=[user_id],
+            include_global=bool(affected_workspace_ids),
+        )

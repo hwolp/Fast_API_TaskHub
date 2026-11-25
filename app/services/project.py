@@ -1,4 +1,5 @@
 from app.core import messages
+from app.core.cache import TaskListCacheInvalidator
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.permissions import can_delete_project, can_write_project
 from app.models import Project, User
@@ -9,6 +10,17 @@ from app.services.base import ScopedService
 
 
 class ProjectService(ScopedService[ProjectRepository]):
+    def __init__(
+        self,
+        repository: ProjectRepository,
+        *,
+        task_cache_invalidator: TaskListCacheInvalidator | None = None,
+    ) -> None:
+        super().__init__(repository)
+        self.task_cache_invalidator = (
+            task_cache_invalidator or TaskListCacheInvalidator()
+        )
+
     async def _load(
         self, project_id: int, user: User
     ) -> tuple[Project, WorkspaceRole]:
@@ -64,5 +76,7 @@ class ProjectService(ScopedService[ProjectRepository]):
         project, role = await self._load(project_id, user)
         if not can_delete_project(role):
             raise ForbiddenError(messages.FORBIDDEN)
+        workspace_id = project.workspace_id
         await self.repository.delete(project)
-        await self.commit_task_list_changes()
+        await self.session.commit()
+        await self.task_cache_invalidator.invalidate(workspace_ids=[workspace_id])

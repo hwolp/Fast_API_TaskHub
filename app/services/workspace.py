@@ -1,4 +1,5 @@
 from app.core import messages
+from app.core.cache import TaskListCacheInvalidator
 from app.core.exceptions import (
     BadRequestError,
     ConflictError,
@@ -23,6 +24,17 @@ from app.services.base import ScopedService
 
 
 class WorkspaceService(ScopedService[WorkspaceRepository]):
+    def __init__(
+        self,
+        repository: WorkspaceRepository,
+        *,
+        task_cache_invalidator: TaskListCacheInvalidator | None = None,
+    ) -> None:
+        super().__init__(repository)
+        self.task_cache_invalidator = (
+            task_cache_invalidator or TaskListCacheInvalidator()
+        )
+
     async def _load(
         self, workspace_id: int, user: User
     ) -> tuple[Workspace, WorkspaceRole]:
@@ -41,6 +53,9 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
             name=data.name, owner_id=user.id
         )
         await self.session.commit()
+        await self.task_cache_invalidator.invalidate(
+            user_ids=[user.id], include_global=False
+        )
         return workspace
 
     async def list_workspaces(
@@ -69,7 +84,8 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         if not can_manage_workspace(role):
             raise ForbiddenError(messages.FORBIDDEN)
         await self.repository.delete(workspace)
-        await self.commit_task_list_changes()
+        await self.session.commit()
+        await self.task_cache_invalidator.invalidate(workspace_ids=[workspace_id])
 
     async def list_members(
         self, workspace_id: int, user: User
@@ -93,7 +109,10 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         ):
             raise ConflictError(messages.MEMBER_ALREADY_EXISTS)
         member = await self.repository.add_member(workspace_id, data.user_id, data.role)
-        await self.commit_task_list_changes()
+        await self.session.commit()
+        await self.task_cache_invalidator.invalidate(
+            user_ids=[data.user_id], include_global=False
+        )
         return member
 
     async def update_member_role(
@@ -118,7 +137,13 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
                 workspace_id, member_user_id
             )
         updated = await self.repository.update_member(member, data.role)
-        await self.commit_task_list_changes()
+        await self.session.commit()
+        unassigned = data.role not in WRITE_ROLES
+        await self.task_cache_invalidator.invalidate(
+            workspace_ids=[workspace_id] if unassigned else (),
+            user_ids=[member_user_id],
+            include_global=unassigned,
+        )
         return updated
 
     async def remove_member(
@@ -136,4 +161,7 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
             workspace_id, member_user_id
         )
         await self.repository.remove_member(member)
-        await self.commit_task_list_changes()
+        await self.session.commit()
+        await self.task_cache_invalidator.invalidate(
+            workspace_ids=[workspace_id], user_ids=[member_user_id]
+        )

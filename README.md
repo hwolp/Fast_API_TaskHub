@@ -112,15 +112,17 @@ token bằng JSON, không tự đặt cookie.
 
 ## Cache danh sách task
 
-Chạy `python -m alembic upgrade head` để tạo bảng phiên bản cache. Đặt
-`REDIS_URL=redis://localhost:6379/0` trong `.env` để bật cache cho
+Đặt `REDIS_URL=redis://localhost:6379/0` trong `.env` để bật cache cho
 `GET /api/v1/tasks/`. Dùng `TASK_LIST_CACHE_TTL_SECONDS` để đổi TTL mặc định
-60 giây. Để trống `REDIS_URL` để chạy trực tiếp với DB.
+60 giây và `REDIS_SOCKET_TIMEOUT_SECONDS` (mặc định 0.25 giây) cho timeout kết
+nối/đọc Redis. Để trống `REDIS_URL` để chạy trực tiếp với DB (không tốn chi phí
+invalidation khi ghi).
 
-Ứng dụng đọc quyền người dùng và phiên bản cache từ DB. Các thao tác thay đổi
-task, nhãn, quyền workspace hoặc xóa project/workspace cập nhật phiên bản trong
-cùng giao dịch DB. Mọi trang cache cũ tự hết hạn theo TTL. Khi Redis gặp lỗi,
-API danh sách lấy kết quả từ DB.
+Phiên bản cache được quản lý trên Redis theo từng workspace, user và phạm vi
+global cho admin (đọc bằng `MGET`/pipeline), giúp cache hit không phải truy vấn
+bảng revision ở DB và thao tác ghi ở workspace này không làm mất cache của
+workspace khác. Khi Redis gặp lỗi, API tự động fallback sang DB (fail-open); nếu
+Redis ngắt kết nối tạm thời đúng lúc ghi, bản ghi cache cũ tự hết hạn theo TTL.
 
 ## Migration và kiểm thử
 

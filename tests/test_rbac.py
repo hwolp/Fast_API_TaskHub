@@ -9,7 +9,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -18,7 +18,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.core.cache import RedisCache
+from app.core.cache import TASK_LIST_CACHE_PREFIX, RedisCache
 from app.core.database import get_db
 from app.core.security import create_token, read_key
 from app.main import app
@@ -220,23 +220,76 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     def install_task_cache(self):
         cache = RedisCache("redis://localhost:6379/0", 60)
         self.addAsyncCleanup(cache.close)
-        values = {}
+        values: dict[str, bytes] = {}
+        state = {"offline": False}
+        test_case = self
+
+        class FakePipeline:
+            def __init__(self) -> None:
+                self._ops: list[tuple] = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def set(
+                self,
+                key: str,
+                payload: str,
+                *,
+                nx: bool = False,
+                ex: int | None = None,
+            ):
+                self._ops.append(("set", key, payload, nx, ex))
+                return self
+
+            def mget(self, keys):
+                self._ops.append(("mget", list(keys)))
+                return self
+
+            async def execute(self):
+                if state["offline"]:
+                    raise RedisConnectionError("offline")
+                results = []
+                for op in self._ops:
+                    if op[0] == "set":
+                        _, key, payload, nx, ex = op
+                        test_case.assertIsNotNone(ex)
+                        if not nx or key not in values:
+                            values[key] = payload.encode()
+                            results.append(True)
+                        else:
+                            results.append(False)
+                    elif op[0] == "mget":
+                        results.append([values.get(k) for k in op[1]])
+                return results
+
         redis = AsyncMock(wraps=cache.client)
-        redis.get.side_effect = values.get
+
+        def mget_values(keys):
+            if state["offline"]:
+                raise RedisConnectionError("offline")
+            return [values.get(k) for k in keys]
 
         def set_value(key, payload, *, ex):
+            if state["offline"]:
+                raise RedisConnectionError("offline")
             values[key] = payload.encode()
             self.assertEqual(ex, 60)
 
+        redis.mget.side_effect = mget_values
         redis.set.side_effect = set_value
+        redis.pipeline = MagicMock(side_effect=lambda transaction=False: FakePipeline())
         cache.client = redis
         patcher = patch.object(app.state, "cache", cache, create=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        return redis, values
+        return redis, values, state
 
     async def test_task_list_cache_reuses_pages_and_isolates_users(self):
-        redis, values = self.install_task_cache()
+        redis, values, _ = self.install_task_cache()
         visible = await self.make_task("alice")
         hidden = await self.make_task("dave", project=self.p2)
         query = f"{API}?project_id={self.p1}&limit=1"
@@ -256,22 +309,21 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(other.json(), {"items": [], "total": 0})
         unfiltered = await self.call("GET", f"{API}?limit=1", "dave")
         self.assertEqual(unfiltered.json()["items"][0]["id"], hidden["id"])
-        self.assertEqual(len(values), 4)
+        page_keys = [k for k in values if k.startswith(TASK_LIST_CACHE_PREFIX)]
+        self.assertEqual(len(page_keys), 4)
 
-        key = redis.get.await_args_list[0].args[0]
+        key = redis.mget.await_args_list[0].args[0][0]
         values[key] = b"invalid JSON"
         recovered = await self.call("GET", query, "carol")
         self.assertEqual(recovered.json(), first.json())
         self.assertNotEqual(values[key], b"invalid JSON")
 
     async def test_task_list_cache_fallback_tracks_mutations_and_revocation(self):
-        redis, _ = self.install_task_cache()
+        _, _, state = self.install_task_cache()
         task = await self.make_task("alice")
         original = await self.call("GET", API, "carol")
         self.assertEqual(original.json()["total"], 1)
-        read, write = redis.get.side_effect, redis.set.side_effect
-        redis.get.side_effect = RedisConnectionError("offline")
-        redis.set.side_effect = RedisConnectionError("offline")
+        state["offline"] = True
 
         updated = await self.call(
             "PATCH", f"{API}{task['id']}", "alice", json={"title": "Updated"}
@@ -281,8 +333,7 @@ class TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
             fallback = await self.call("GET", API, "carol")
         self.assertEqual(fallback.json()["items"][0]["title"], "Updated")
 
-        redis.get.side_effect = read
-        redis.set.side_effect = write
+        state["offline"] = False
         label = await self.call(
             "POST", "/api/v1/labels/", "alice",
             json={"project_id": self.p1, "name": "Urgent"},
