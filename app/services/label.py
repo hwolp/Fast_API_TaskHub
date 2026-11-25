@@ -1,6 +1,7 @@
 from sqlalchemy.exc import IntegrityError
 
 from app.core import messages
+from app.core.cache import TaskListCacheInvalidator
 from app.core.exceptions import (
     BadRequestError,
     ConflictError,
@@ -16,6 +17,17 @@ from app.services.base import ScopedEntity, ScopedService
 
 
 class LabelService(ScopedService[LabelRepository]):
+    def __init__(
+        self,
+        repository: LabelRepository,
+        *,
+        task_cache_invalidator: TaskListCacheInvalidator | None = None,
+    ) -> None:
+        super().__init__(repository)
+        self.task_cache_invalidator = (
+            task_cache_invalidator or TaskListCacheInvalidator()
+        )
+
     async def _load(self, label_id: int, user: User) -> ScopedEntity[Label]:
         return await self.load_with_workspace(
             label_id, user, self.repository.get_with_workspace, messages.LABEL_NOT_FOUND
@@ -68,18 +80,23 @@ class LabelService(ScopedService[LabelRepository]):
                 scoped.entity, data.model_dump(exclude_unset=True)
             )
             await self.session.commit()
-            return updated
         except IntegrityError:
             await self.session.rollback()
             raise ConflictError(messages.LABEL_NAME_EXISTS)
+        await self.task_cache_invalidator.invalidate(
+            workspace_ids=[scoped.workspace_id]
+        )
+        return updated
 
     async def delete_label(self, label_id: int, user: User) -> None:
         scoped = await self._load(label_id, user)
         if not can_manage_label(scoped.role):
             raise ForbiddenError(messages.FORBIDDEN)
         self._ensure_project_active(scoped.project_status)
+        workspace_id = scoped.workspace_id
         await self.repository.delete(scoped.entity)
         await self.session.commit()
+        await self.task_cache_invalidator.invalidate(workspace_ids=[workspace_id])
 
     async def attach_label_to_task(
         self, task_id: int, label_id: int, user: User
@@ -93,6 +110,9 @@ class LabelService(ScopedService[LabelRepository]):
             raise BadRequestError(messages.LABEL_PROJECT_MISMATCH)
         await self.repository.attach_to_task(task_id, label_id)
         await self.session.commit()
+        await self.task_cache_invalidator.invalidate(
+            workspace_ids=[task_scoped.workspace_id]
+        )
 
     async def detach_label_from_task(
         self, task_id: int, label_id: int, user: User
@@ -108,3 +128,6 @@ class LabelService(ScopedService[LabelRepository]):
         if not detached:
             raise NotFoundError(messages.LABEL_NOT_ATTACHED)
         await self.session.commit()
+        await self.task_cache_invalidator.invalidate(
+            workspace_ids=[task_scoped.workspace_id]
+        )

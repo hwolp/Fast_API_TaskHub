@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.api.v1.endpoints.auth import jwks_router
 from app.api.v1.router import api_router
+from app.core.cache import RedisCache
 from app.core.config import settings
 from app.core.security import load_keys
 
@@ -11,7 +12,21 @@ from app.core.security import load_keys
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_keys()
-    yield
+    cache = (
+        RedisCache(
+            settings.REDIS_URL,
+            settings.TASK_LIST_CACHE_TTL_SECONDS,
+            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+        )
+        if settings.REDIS_URL
+        else None
+    )
+    app.state.cache = cache
+    try:
+        yield
+    finally:
+        if cache is not None:
+            await cache.close()
 
 
 app = FastAPI(

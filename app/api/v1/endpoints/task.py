@@ -46,14 +46,8 @@ async def list_tasks(
         int | None, Query(ge=1, description="Lọc theo ID dự án")
     ] = None,
 ) -> PaginatedResponse[TaskResponse]:
-    items, total = await service.list_tasks(
-        user,
-        pagination=pagination,
-        project_id=project_id,
-    )
-    return PaginatedResponse(
-        items=[TaskResponse.model_validate(item) for item in items],
-        total=total,
+    return await service.list_task_page(
+        user, pagination=pagination, project_id=project_id
     )
 
 

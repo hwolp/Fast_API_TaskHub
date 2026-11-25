@@ -12,6 +12,26 @@ class TaskRepository(BaseRepository[Task]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Task, session)
 
+    async def get_cache_scope_workspace_ids(
+        self, user: User, project_id: int | None
+    ) -> tuple[list[int], bool]:
+        if user.role == UserRole.ADMIN and project_id is None:
+            return [], True
+        if project_id is not None:
+            proj_ws_id = await self.session.scalar(
+                select(Project.workspace_id).where(Project.id == project_id)
+            )
+            if proj_ws_id is None:
+                return [], False
+            if user.role == UserRole.ADMIN:
+                return [proj_ws_id], True
+            role = await self.workspace_role(proj_ws_id, user.id)
+            return ([proj_ws_id], True) if role is not None else ([], True)
+        ws_ids = list(
+            (await self.session.scalars(self.visible_workspace_ids(user.id))).all()
+        )
+        return sorted(ws_ids), True
+
     async def get_with_workspace(
         self, task_id: int
     ) -> tuple[Task, int, ProjectStatus] | None:

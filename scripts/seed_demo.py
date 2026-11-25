@@ -4,6 +4,8 @@ import asyncio
 
 from sqlalchemy import select
 
+from app.core.cache import RedisCache, TaskListCacheInvalidator
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine
 from app.core.security import password_hash
 from app.models.enums import UserRole, WorkspaceRole
@@ -71,6 +73,20 @@ async def seed() -> None:
             await db.flush()
 
         await db.commit()
+        if settings.REDIS_URL:
+            cache = RedisCache(
+                settings.REDIS_URL,
+                settings.TASK_LIST_CACHE_TTL_SECONDS,
+                socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+            )
+            try:
+                await TaskListCacheInvalidator(cache).invalidate(
+                    workspace_ids=[ws.id],
+                    user_ids=[u.id for u in users_by_email.values()],
+                )
+            finally:
+                await cache.close()
+
         print(f"Seeded successfully! Demo password for all accounts: {DEMO_PASSWORD}")
         print(f"Workspace ID : {ws.id} (name: {ws.name})")
         print(f"Project ID   : {proj.id} (use this as project_id in POST /api/v1/tasks/)")
@@ -81,4 +97,3 @@ async def seed() -> None:
 
 if __name__ == "__main__":
     asyncio.run(seed())
-

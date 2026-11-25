@@ -110,6 +110,20 @@ Với client trình duyệt, giữ access token trong bộ nhớ; refresh token 
 qua BFF/cookie HttpOnly, Secure với bảo vệ CSRF. Các endpoint hiện tại nhận và trả
 token bằng JSON, không tự đặt cookie.
 
+## Cache danh sách task
+
+Đặt `REDIS_URL=redis://localhost:6379/0` trong `.env` để bật cache cho
+`GET /api/v1/tasks/`. Dùng `TASK_LIST_CACHE_TTL_SECONDS` để đổi TTL mặc định
+60 giây và `REDIS_SOCKET_TIMEOUT_SECONDS` (mặc định 0.25 giây) cho timeout kết
+nối/đọc Redis. Để trống `REDIS_URL` để chạy trực tiếp với DB (không tốn chi phí
+invalidation khi ghi).
+
+Phiên bản cache được quản lý trên Redis theo từng workspace, user và phạm vi
+global cho admin (đọc bằng `MGET`/pipeline), giúp cache hit không phải truy vấn
+bảng revision ở DB và thao tác ghi ở workspace này không làm mất cache của
+workspace khác. Khi Redis gặp lỗi, API tự động fallback sang DB (fail-open); nếu
+Redis ngắt kết nối tạm thời đúng lúc ghi, bản ghi cache cũ tự hết hạn theo TTL.
+
 ## Migration và kiểm thử
 
 Database đang ở `0001` chỉ cần chạy `python -m alembic upgrade head` để thêm bảng
