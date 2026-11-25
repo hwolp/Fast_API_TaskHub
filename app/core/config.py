@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = ""
     TASK_LIST_CACHE_TTL_SECONDS: int = Field(default=60, gt=0)
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = Field(default=0.25, gt=0)
 
     @field_validator("DEBUG", mode="before")
     @classmethod

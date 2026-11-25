@@ -13,7 +13,11 @@ from app.core.security import load_keys
 async def lifespan(app: FastAPI):
     load_keys()
     cache = (
-        RedisCache(settings.REDIS_URL, settings.TASK_LIST_CACHE_TTL_SECONDS)
+        RedisCache(
+            settings.REDIS_URL,
+            settings.TASK_LIST_CACHE_TTL_SECONDS,
+            socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
+        )
         if settings.REDIS_URL
         else None
     )
