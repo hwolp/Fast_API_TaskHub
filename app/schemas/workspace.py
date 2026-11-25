@@ -8,9 +8,19 @@ from app.models.enums import WorkspaceRole
 class WorkspaceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Tên workspace")
 
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"name": "Product Engineering"}}
+    )
+
 
 class WorkspaceUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100, description="Tên workspace")
+    name: str | None = Field(
+        default=None, min_length=1, max_length=100, description="Tên workspace"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"name": "Platform Engineering"}}
+    )
 
     @model_validator(mode="after")
     def reject_null_for_required_columns(self) -> "WorkspaceUpdate":
@@ -25,12 +35,28 @@ class WorkspaceResponse(BaseModel):
     owner_id: int
     created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "name": "Product Engineering",
+                "owner_id": 1,
+                "created_at": "2026-11-25T10:00:00Z",
+            }
+        },
+    )
 
 
 class WorkspaceMemberAdd(BaseModel):
     user_id: int = Field(..., description="ID người dùng được thêm vào workspace")
-    role: WorkspaceRole = Field(default=WorkspaceRole.VIEWER, description="Vai trò trong workspace")
+    role: WorkspaceRole = Field(
+        default=WorkspaceRole.VIEWER, description="Vai trò trong workspace"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"user_id": 2, "role": "EDITOR"}}
+    )
 
     @field_validator("role")
     @classmethod
@@ -42,6 +68,8 @@ class WorkspaceMemberAdd(BaseModel):
 
 class WorkspaceMemberUpdate(BaseModel):
     role: WorkspaceRole = Field(..., description="Vai trò mới trong workspace")
+
+    model_config = ConfigDict(json_schema_extra={"example": {"role": "VIEWER"}})
 
     @field_validator("role")
     @classmethod
@@ -56,5 +84,13 @@ class WorkspaceMemberResponse(BaseModel):
     user_id: int
     role: WorkspaceRole
 
-    model_config = ConfigDict(from_attributes=True)
-
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "workspace_id": 1,
+                "user_id": 2,
+                "role": "EDITOR",
+            }
+        },
+    )

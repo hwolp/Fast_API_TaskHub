@@ -11,22 +11,55 @@ class TaskBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Tiêu đề task")
     description: str | None = Field(default=None, description="Mô tả task")
     status: TaskStatus = Field(default=TaskStatus.TODO, description="Trạng thái task")
-    priority: TaskPriority = Field(default=TaskPriority.MEDIUM, description="Mức độ ưu tiên")
+    priority: TaskPriority = Field(
+        default=TaskPriority.MEDIUM, description="Mức độ ưu tiên"
+    )
     due_date: datetime | None = Field(default=None, description="Hạn chót hoàn thành")
-    assignee_id: int | None = Field(default=None, description="ID người được phân công")
+    assignee_id: int | None = Field(
+        default=None, description="ID người được phân công"
+    )
 
 
 class TaskCreate(TaskBase):
     project_id: PositiveInt = Field(..., description="ID dự án chứa task")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "project_id": 1,
+                "title": "Implement OpenAPI documentation",
+                "description": "Add Swagger tags, examples, and error schemas",
+                "status": "TODO",
+                "priority": "HIGH",
+                "due_date": "2026-12-01T17:00:00Z",
+                "assignee_id": 2,
+            }
+        }
+    )
+
 
 class TaskUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=255, description="Tiêu đề task")
+    title: str | None = Field(
+        default=None, min_length=1, max_length=255, description="Tiêu đề task"
+    )
     description: str | None = Field(default=None, description="Mô tả task")
     status: TaskStatus | None = Field(default=None, description="Trạng thái task")
     priority: TaskPriority | None = Field(default=None, description="Mức độ ưu tiên")
     due_date: datetime | None = Field(default=None, description="Hạn chót hoàn thành")
-    assignee_id: int | None = Field(default=None, description="ID người được phân công")
+    assignee_id: int | None = Field(
+        default=None, description="ID người được phân công"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Finalize Swagger API docs",
+                "status": "IN_PROGRESS",
+                "priority": "URGENT",
+                "assignee_id": 2,
+            }
+        }
+    )
 
     @model_validator(mode="after")
     def reject_null_for_required_columns(self) -> "TaskUpdate":
@@ -43,4 +76,28 @@ class TaskResponse(TaskBase):
     created_at: datetime
     labels: list[LabelResponse] = []
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "project_id": 1,
+                "title": "Implement OpenAPI documentation",
+                "description": "Add Swagger tags, examples, and error schemas",
+                "status": "TODO",
+                "priority": "HIGH",
+                "due_date": "2026-12-01T17:00:00Z",
+                "assignee_id": 2,
+                "created_by": 1,
+                "created_at": "2026-11-25T10:00:00Z",
+                "labels": [
+                    {
+                        "id": 1,
+                        "project_id": 1,
+                        "name": "backend",
+                        "color": "#3B82F6",
+                    }
+                ],
+            }
+        },
+    )

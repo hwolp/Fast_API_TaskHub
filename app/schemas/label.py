@@ -29,6 +29,16 @@ class LabelCreate(BaseModel):
         description="Mã màu nhãn (hex #RRGGBB)",
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "project_id": 1,
+                "name": "backend",
+                "color": "#3B82F6",
+            }
+        }
+    )
+
     @field_validator("name")
     @classmethod
     def validate_name_not_blank(cls, v: str) -> str:
@@ -52,6 +62,15 @@ class LabelUpdate(BaseModel):
         description="Mã màu nhãn (hex #RRGGBB)",
     )
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "api",
+                "color": "#EF4444",
+            }
+        }
+    )
+
     @field_validator("name")
     @classmethod
     def validate_name_not_blank(cls, v: str | None) -> str | None:
@@ -73,4 +92,14 @@ class LabelResponse(BaseModel):
     name: str
     color: str
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "project_id": 1,
+                "name": "backend",
+                "color": "#3B82F6",
+            }
+        },
+    )

@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     PROJECT_NAME: str = "FastAPI TaskHub"
     DEBUG: bool = True
+    ENABLE_DOCS: bool = True
     API_V1_STR: str = "/api/v1"
     JWT_PRIVATE_KEY_PATH: str = ".keys/private.pem"
     JWT_PUBLIC_KEY_PATH: str = ".keys/public.pem"
@@ -18,13 +19,14 @@ class Settings(BaseSettings):
     TASK_LIST_CACHE_TTL_SECONDS: int = Field(default=60, gt=0)
     REDIS_SOCKET_TIMEOUT_SECONDS: float = Field(default=0.25, gt=0)
 
-    @field_validator("DEBUG", mode="before")
+    @field_validator("DEBUG", "ENABLE_DOCS", mode="before")
     @classmethod
-    def parse_debug(cls, v):
+    def parse_bool_flags(cls, v):
         if isinstance(v, str):
-            if v.lower() in ("true", "1", "yes", "t", "dev", "development"):
+            normalized = v.strip().lower()
+            if normalized in ("true", "1", "yes", "t", "dev", "development"):
                 return True
-            if v.lower() in ("false", "0", "no", "f", "release", "prod", "production"):
+            if normalized in ("false", "0", "no", "f", "release", "prod", "production"):
                 return False
         return bool(v)
 

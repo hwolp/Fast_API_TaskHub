@@ -24,7 +24,11 @@ from app.services.project import ProjectService
 from app.services.task import TaskService
 from app.services.workspace import WorkspaceService
 
-bearer = HTTPBearer(auto_error=False)
+bearer = HTTPBearer(
+    auto_error=False,
+    bearerFormat="JWT",
+    description="Paste the RS256 access_token obtained from POST /api/v1/auth/login.",
+)
 SessionDep = Annotated[AsyncSession, Depends(get_db)]
 
 
