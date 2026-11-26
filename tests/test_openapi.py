@@ -1,13 +1,18 @@
 import unittest
+from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 
+from app.core import messages
 from app.core.config import Settings, settings
 from app.core.openapi import API_VERSION
-from app.main import app, create_app
+from app.main import create_app
 from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest
 from app.schemas.comment import CommentCreate, CommentUpdate
+from app.schemas.common import HEALTH_MESSAGE_OK, HEALTH_STATUS_OK
 from app.schemas.label import LabelCreate, LabelUpdate
+from app.schemas.pagination import MAX_LIMIT
 from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.schemas.task import TaskCreate, TaskUpdate
 from app.schemas.workspace import (
@@ -19,6 +24,68 @@ from app.schemas.workspace import (
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete")
 ERROR_CODES = ("400", "401", "403", "404", "409")
+EXPECTED_ERROR_EXAMPLES = {
+    "400": messages.PROJECT_ARCHIVED,
+    "401": messages.TOKEN_MISSING,
+    "403": messages.FORBIDDEN,
+    "404": messages.WORKSPACE_NOT_FOUND,
+    "409": messages.MEMBER_ALREADY_EXISTS,
+}
+EXPECTED_ERROR_RESPONSES: dict[tuple[str, str], set[str]] = {
+    ("get", "/healthy"): set(),
+    ("get", "/.well-known/jwks.json"): set(),
+    ("post", "/api/v1/auth/register"): {"409"},
+    ("post", "/api/v1/auth/login"): {"401"},
+    ("post", "/api/v1/auth/refresh"): {"401"},
+    ("post", "/api/v1/auth/logout"): {"401"},
+    ("get", "/api/v1/auth/me"): {"401"},
+    ("post", "/api/v1/workspaces/"): {"401"},
+    ("get", "/api/v1/workspaces/"): {"401"},
+    ("get", "/api/v1/workspaces/{workspace_id}"): {"401", "404"},
+    ("patch", "/api/v1/workspaces/{workspace_id}"): {"401", "403", "404"},
+    ("delete", "/api/v1/workspaces/{workspace_id}"): {"401", "403", "404"},
+    ("get", "/api/v1/workspaces/{workspace_id}/members"): {"401", "404"},
+    ("post", "/api/v1/workspaces/{workspace_id}/members"): {"401", "403", "404", "409"},
+    ("patch", "/api/v1/workspaces/{workspace_id}/members/{member_user_id}"): {
+        "400",
+        "401",
+        "403",
+        "404",
+    },
+    ("delete", "/api/v1/workspaces/{workspace_id}/members/{member_user_id}"): {
+        "400",
+        "401",
+        "403",
+        "404",
+    },
+    ("post", "/api/v1/projects/"): {"401", "403", "404"},
+    ("get", "/api/v1/projects/"): {"401"},
+    ("get", "/api/v1/projects/{project_id}"): {"401", "404"},
+    ("patch", "/api/v1/projects/{project_id}"): {"401", "403", "404"},
+    ("delete", "/api/v1/projects/{project_id}"): {"401", "403", "404"},
+    ("post", "/api/v1/tasks/"): {"400", "401", "403", "404"},
+    ("get", "/api/v1/tasks/"): {"401"},
+    ("get", "/api/v1/tasks/{task_id}"): {"401", "404"},
+    ("patch", "/api/v1/tasks/{task_id}"): {"400", "401", "403", "404"},
+    ("delete", "/api/v1/tasks/{task_id}"): {"400", "401", "403", "404"},
+    ("post", "/api/v1/tasks/{task_id}/labels/{label_id}"): {"400", "401", "403", "404"},
+    ("delete", "/api/v1/tasks/{task_id}/labels/{label_id}"): {
+        "400",
+        "401",
+        "403",
+        "404",
+    },
+    ("post", "/api/v1/labels/"): {"400", "401", "403", "404", "409"},
+    ("get", "/api/v1/labels/"): {"401"},
+    ("get", "/api/v1/labels/{label_id}"): {"401", "404"},
+    ("patch", "/api/v1/labels/{label_id}"): {"400", "401", "403", "404", "409"},
+    ("delete", "/api/v1/labels/{label_id}"): {"400", "401", "403", "404"},
+    ("post", "/api/v1/comments/"): {"400", "401", "403", "404"},
+    ("get", "/api/v1/comments/"): {"401"},
+    ("get", "/api/v1/comments/{comment_id}"): {"401", "404"},
+    ("patch", "/api/v1/comments/{comment_id}"): {"400", "401", "403", "404"},
+    ("delete", "/api/v1/comments/{comment_id}"): {"400", "401", "403", "404"},
+}
 PROTECTED_PREFIXES = (
     "/api/v1/workspaces",
     "/api/v1/projects",
@@ -63,9 +130,10 @@ REQUEST_SCHEMA_MODELS = {
 
 
 class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
-    async def _get_openapi_schema(self, application=app) -> dict:
+    async def _get_openapi_schema(self, application=None) -> dict:
+        target_app = application or create_app(enable_docs=True)
         async with AsyncClient(
-            transport=ASGITransport(app=application), base_url="http://test"
+            transport=ASGITransport(app=target_app), base_url="http://test"
         ) as client:
             response = await client.get("/openapi.json")
         self.assertEqual(response.status_code, 200, response.text)
@@ -77,7 +145,11 @@ class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
         info = schema["info"]
         self.assertEqual(info["title"], settings.PROJECT_NAME)
         self.assertEqual(info["version"], API_VERSION)
-        self.assertTrue(info.get("description", "").strip())
+        description = info.get("description", "").strip()
+        self.assertTrue(description)
+        self.assertIn(f"(1-{MAX_LIMIT})", description)
+        self.assertIn("422", description)
+        self.assertNotIn("plus commenting", description)
 
         declared_tags = {
             tag["name"]: tag.get("description", "").strip()
@@ -98,11 +170,19 @@ class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_operations_have_summaries_valid_tags_and_error_models(self):
         schema = await self._get_openapi_schema()
         declared_tags = {tag["name"] for tag in schema["tags"]}
+        seen_operations: set[tuple[str, str]] = set()
 
         for path, path_item in schema["paths"].items():
             for method, op in path_item.items():
                 if method not in HTTP_METHODS:
                     continue
+                op_key = (method, path)
+                seen_operations.add(op_key)
+                self.assertIn(
+                    op_key,
+                    EXPECTED_ERROR_RESPONSES,
+                    f"Unexpected operation {method.upper()} {path}; update EXPECTED_ERROR_RESPONSES",
+                )
                 self.assertTrue(
                     op.get("summary", "").strip(),
                     f"{method.upper()} {path} must define summary",
@@ -113,21 +193,30 @@ class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(tag, declared_tags)
 
                 responses = op.get("responses", {})
-                for code in ERROR_CODES:
-                    if code not in responses:
-                        continue
-                    ref = (
-                        responses[code]
-                        .get("content", {})
-                        .get("application/json", {})
-                        .get("schema", {})
-                        .get("$ref")
-                    )
+                declared_error_codes = {
+                    code for code in responses if code in ERROR_CODES
+                }
+                self.assertEqual(
+                    declared_error_codes,
+                    EXPECTED_ERROR_RESPONSES[op_key],
+                    f"{method.upper()} {path} error status codes mismatch",
+                )
+                for code in declared_error_codes:
+                    app_json = responses[code].get("content", {}).get("application/json", {})
+                    ref = app_json.get("schema", {}).get("$ref")
                     self.assertEqual(
                         ref,
                         "#/components/schemas/ErrorResponse",
                         f"{method.upper()} {path} {code} must reference ErrorResponse",
                     )
+                    example_detail = app_json.get("example", {}).get("detail")
+                    self.assertEqual(
+                        example_detail,
+                        EXPECTED_ERROR_EXAMPLES[code],
+                        f"{method.upper()} {path} {code} example detail mismatch",
+                    )
+
+        self.assertEqual(seen_operations, set(EXPECTED_ERROR_RESPONSES.keys()))
 
         jwks_ref = schema["paths"]["/.well-known/jwks.json"]["get"]["responses"]["200"][
             "content"
@@ -166,6 +255,11 @@ class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
                         op,
                         f"Public {method.upper()} {path} must not require security",
                     )
+                else:
+                    self.fail(
+                        f"Unclassified operation {method.upper()} {path}; "
+                        "add it to PROTECTED_PREFIXES or PUBLIC_OPERATIONS"
+                    )
 
     async def test_request_schema_examples_exist_and_validate(self):
         schema = await self._get_openapi_schema()
@@ -197,7 +291,11 @@ class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(healthy_res.status_code, 200)
         self.assertEqual(
             healthy_res.json(),
-            {"status": "Healthy", "message": "ok", "version": API_VERSION},
+            {
+                "status": HEALTH_STATUS_OK,
+                "message": HEALTH_MESSAGE_OK,
+                "version": API_VERSION,
+            },
         )
 
         disabled_app = create_app(enable_docs=False)
@@ -209,17 +307,47 @@ class OpenAPIDocsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get("/openapi.json")).status_code, 404)
             self.assertEqual((await client.get("/healthy")).status_code, 200)
 
-        self.assertFalse(
-            Settings(
-                _env_file=None,
-                DATABASE_URL="sqlite+aiosqlite://",
-                ENABLE_DOCS="false",
-            ).ENABLE_DOCS
+        with patch.object(settings, "ENABLE_DOCS", False):
+            default_disabled_app = create_app()
+        async with AsyncClient(
+            transport=ASGITransport(app=default_disabled_app), base_url="http://test"
+        ) as client:
+            self.assertEqual((await client.get("/docs")).status_code, 404)
+            self.assertEqual((await client.get("/openapi.json")).status_code, 404)
+
+        default_settings = Settings(
+            _env_file=None,
+            DATABASE_URL="sqlite+aiosqlite://",
         )
-        self.assertTrue(
-            Settings(
-                _env_file=None,
-                DATABASE_URL="sqlite+aiosqlite://",
-                ENABLE_DOCS="true",
-            ).ENABLE_DOCS
-        )
+        self.assertFalse(default_settings.ENABLE_DOCS)
+
+        for raw_true in ("true", "1", "yes", "on", "TRUE"):
+            self.assertTrue(
+                Settings(
+                    _env_file=None,
+                    DATABASE_URL="sqlite+aiosqlite://",
+                    ENABLE_DOCS=raw_true,
+                ).ENABLE_DOCS,
+                f"Expected ENABLE_DOCS={raw_true!r} to parse as True",
+            )
+
+        for raw_false in ("false", "0", "no", "off", "disabled", "none", "OFF"):
+            self.assertFalse(
+                Settings(
+                    _env_file=None,
+                    DATABASE_URL="sqlite+aiosqlite://",
+                    ENABLE_DOCS=raw_false,
+                ).ENABLE_DOCS,
+                f"Expected ENABLE_DOCS={raw_false!r} to parse as False",
+            )
+
+        for raw_invalid in ("maybe", "enabled-ish", ""):
+            with self.assertRaises(
+                ValidationError,
+                msg=f"Expected ENABLE_DOCS={raw_invalid!r} to fail validation",
+            ):
+                Settings(
+                    _env_file=None,
+                    DATABASE_URL="sqlite+aiosqlite://",
+                    ENABLE_DOCS=raw_invalid,
+                )
