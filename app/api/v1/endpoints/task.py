@@ -8,7 +8,11 @@ from app.api.v1.responses import (
     FORBIDDEN_RESPONSE,
     NOT_FOUND_RESPONSE,
 )
-from app.core.notifications import dispatch_task_assigned
+from app.core.notifications import (
+    TaskAssignedEvent,
+    TaskAssignmentNotifier,
+    dispatch_task_assigned,
+)
 from app.dependencies import (
     CurrentUser,
     LabelServiceDep,
@@ -19,6 +23,15 @@ from app.schemas.pagination import PaginatedResponse, PaginationDep
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 
 router = APIRouter()
+
+
+def _schedule_assignment_notification(
+    background_tasks: BackgroundTasks,
+    notifier: TaskAssignmentNotifier,
+    event: TaskAssignedEvent | None,
+) -> None:
+    if event is not None:
+        background_tasks.add_task(dispatch_task_assigned, notifier, event)
 
 
 @router.post(
@@ -37,10 +50,9 @@ async def create_task(
     notifier: TaskAssignmentNotifierDep,
 ) -> TaskResponse:
     result = await service.create_task(data, user)
-    if result.assigned_event is not None:
-        background_tasks.add_task(
-            dispatch_task_assigned, notifier, result.assigned_event
-        )
+    _schedule_assignment_notification(
+        background_tasks, notifier, result.assigned_event
+    )
     return TaskResponse.model_validate(result.task)
 
 
@@ -91,10 +103,9 @@ async def update_task(
     notifier: TaskAssignmentNotifierDep,
 ) -> TaskResponse:
     result = await service.update_task(task_id, data, user)
-    if result.assigned_event is not None:
-        background_tasks.add_task(
-            dispatch_task_assigned, notifier, result.assigned_event
-        )
+    _schedule_assignment_notification(
+        background_tasks, notifier, result.assigned_event
+    )
     return TaskResponse.model_validate(result.task)
 
 

@@ -1,11 +1,9 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.notifications import (
-    DEFAULT_SMTP_FROM_EMAIL,
-    DEFAULT_SMTP_PORT,
-    DEFAULT_SMTP_TIMEOUT_SECONDS,
-)
+DEFAULT_SMTP_PORT = 587
+DEFAULT_SMTP_FROM_EMAIL = "noreply@taskhub.local"
+DEFAULT_SMTP_TIMEOUT_SECONDS = 5.0
 
 TRUE_BOOL_VALUES = frozenset({"true", "1", "yes", "t", "on", "dev", "development"})
 FALSE_BOOL_VALUES = frozenset(

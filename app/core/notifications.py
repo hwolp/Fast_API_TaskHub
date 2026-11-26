@@ -8,11 +8,13 @@ from typing import Protocol
 
 from starlette.concurrency import run_in_threadpool
 
-logger = logging.getLogger(__name__)
+from app.core.config import (
+    DEFAULT_SMTP_FROM_EMAIL,
+    DEFAULT_SMTP_PORT,
+    DEFAULT_SMTP_TIMEOUT_SECONDS,
+)
 
-DEFAULT_SMTP_PORT = 587
-DEFAULT_SMTP_FROM_EMAIL = "noreply@taskhub.local"
-DEFAULT_SMTP_TIMEOUT_SECONDS = 5.0
+logger = logging.getLogger(__name__)
 
 
 def _sanitize_header(value: str) -> str:
@@ -52,11 +54,9 @@ class LoggingAndSmtpTaskNotifier:
     ) -> None:
         self.smtp_host = smtp_host.strip()
         self.smtp_port = smtp_port
-        self.smtp_username = smtp_username
+        self.smtp_username = smtp_username.strip()
         self.smtp_password = smtp_password
-        self.smtp_from_email = (
-            smtp_from_email.strip() or smtp_username.strip() or DEFAULT_SMTP_FROM_EMAIL
-        )
+        self.smtp_from_email = smtp_from_email.strip() or DEFAULT_SMTP_FROM_EMAIL
         self.smtp_use_tls = smtp_use_tls
         self.smtp_timeout_seconds = smtp_timeout_seconds
 
