@@ -1,11 +1,27 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+TRUE_BOOL_VALUES = frozenset({"true", "1", "yes", "t", "on", "dev", "development"})
+FALSE_BOOL_VALUES = frozenset(
+    {
+        "false",
+        "0",
+        "no",
+        "f",
+        "off",
+        "disabled",
+        "none",
+        "release",
+        "prod",
+        "production",
+    }
+)
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "FastAPI TaskHub"
     DEBUG: bool = True
-    ENABLE_DOCS: bool = True
+    ENABLE_DOCS: bool = False
     API_V1_STR: str = "/api/v1"
     JWT_PRIVATE_KEY_PATH: str = ".keys/private.pem"
     JWT_PUBLIC_KEY_PATH: str = ".keys/public.pem"
@@ -22,13 +38,17 @@ class Settings(BaseSettings):
     @field_validator("DEBUG", "ENABLE_DOCS", mode="before")
     @classmethod
     def parse_bool_flags(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int) and v in (0, 1):
+            return bool(v)
         if isinstance(v, str):
             normalized = v.strip().lower()
-            if normalized in ("true", "1", "yes", "t", "dev", "development"):
+            if normalized in TRUE_BOOL_VALUES:
                 return True
-            if normalized in ("false", "0", "no", "f", "release", "prod", "production"):
+            if normalized in FALSE_BOOL_VALUES:
                 return False
-        return bool(v)
+        raise ValueError(f"Invalid boolean flag value: {v!r}")
 
     model_config = SettingsConfigDict(
         env_file=".env",
