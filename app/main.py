@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.v1.endpoints.auth import jwks_router
-from app.api.v1.responses import HealthResponse
 from app.api.v1.router import api_router
 from app.core.cache import RedisCache
 from app.core.config import settings
@@ -14,6 +13,7 @@ from app.core.openapi import (
     SWAGGER_UI_PARAMETERS,
 )
 from app.core.security import load_keys
+from app.schemas.common import HEALTH_MESSAGE_OK, HEALTH_STATUS_OK, HealthResponse
 
 
 @asynccontextmanager
@@ -63,8 +63,8 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
     )
     async def healthy_check() -> HealthResponse:
         return HealthResponse(
-            status="Healthy",
-            message="ok",
+            status=HEALTH_STATUS_OK,
+            message=HEALTH_MESSAGE_OK,
             version=API_VERSION,
         )
 

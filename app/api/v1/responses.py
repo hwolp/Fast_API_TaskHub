@@ -1,58 +1,48 @@
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from app.core import messages
+from app.schemas.common import ErrorResponse
 
 
-class ErrorResponse(BaseModel):
-    detail: str = Field(
-        ...,
-        description="Machine-readable error code or explanation",
-    )
-
-    model_config = ConfigDict(json_schema_extra={"example": {"detail": "not_found"}})
-
-
-class HealthResponse(BaseModel):
-    status: str = Field(..., description="Service health status")
-    message: str = Field(..., description="Short health message")
-    version: str = Field(..., description="Running API version")
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "status": "Healthy",
-                "message": "ok",
-                "version": "1.0.0",
+def _error_response(description: str, example_detail: str) -> dict[str, Any]:
+    return {
+        "model": ErrorResponse,
+        "description": description,
+        "content": {
+            "application/json": {
+                "example": {"detail": example_detail},
             }
-        }
-    )
+        },
+    }
 
 
 BAD_REQUEST_RESPONSE = {
-    400: {
-        "model": ErrorResponse,
-        "description": "Bad Request — invalid domain operation or archived project",
-    }
+    400: _error_response(
+        "Bad Request — invalid domain operation or archived project",
+        messages.PROJECT_ARCHIVED,
+    )
 }
 UNAUTHORIZED_RESPONSE = {
-    401: {
-        "model": ErrorResponse,
-        "description": "Unauthorized — missing, invalid, expired, or revoked credentials/token",
-    }
+    401: _error_response(
+        "Unauthorized — missing, invalid, expired, or revoked credentials/token",
+        messages.TOKEN_MISSING,
+    )
 }
 FORBIDDEN_RESPONSE = {
-    403: {
-        "model": ErrorResponse,
-        "description": "Forbidden — insufficient role or workspace permissions",
-    }
+    403: _error_response(
+        "Forbidden — insufficient role or workspace permissions",
+        messages.FORBIDDEN,
+    )
 }
 NOT_FOUND_RESPONSE = {
-    404: {
-        "model": ErrorResponse,
-        "description": "Resource not found",
-    }
+    404: _error_response(
+        "Resource not found",
+        messages.WORKSPACE_NOT_FOUND,
+    )
 }
 CONFLICT_RESPONSE = {
-    409: {
-        "model": ErrorResponse,
-        "description": "Conflict — resource already exists",
-    }
+    409: _error_response(
+        "Conflict — resource already exists",
+        messages.MEMBER_ALREADY_EXISTS,
+    )
 }
