@@ -1,6 +1,8 @@
+from app.schemas.pagination import MAX_LIMIT
+
 API_VERSION = "1.0.0"
 
-OPENAPI_DESCRIPTION = """
+OPENAPI_DESCRIPTION = f"""
 REST API for collaborative project and task management with RS256 JWT authentication, workspace RBAC, and Redis-backed task list caching.
 
 ## Authentication in Swagger UI
@@ -11,12 +13,12 @@ REST API for collaborative project and task management with RS256 JWT authentica
 
 ## Role-Based Access Control (RBAC)
 - **System roles**: `ADMIN` (global access) and `MEMBER` (scoped by workspace membership).
-- **Workspace roles**: `OWNER` (full workspace control), `EDITOR` (create/edit projects, tasks, labels, comments), and `VIEWER` (read-only access plus commenting).
+- **Workspace roles**: `OWNER` (full workspace control), `EDITOR` (create/edit projects, tasks, labels, and comments within workspace rules), and `VIEWER` (read-only access to workspace, projects, tasks, labels, and comments).
 - **Archived projects**: Projects in `ARCHIVED` status block mutations on child tasks, labels, and comments.
 
 ## Conventions
-- **Pagination**: List endpoints accept `page` (>= 1) and `limit` (1-100) and return `{"items": [...], "total": <int>}`.
-- **Errors**: Domain and auth errors return `{"detail": "<error_code>"}` with standard HTTP status codes (`400`, `401`, `403`, `404`, `409`).
+- **Pagination**: List endpoints accept `page` (>= 1) and `limit` (1-{MAX_LIMIT}) and return `{{"items": [...], "total": <int>}}`.
+- **Errors**: Domain and auth errors (`400`, `401`, `403`, `404`, `409`) return `ErrorResponse` (`{{"detail": "<error_code>"}}`); request validation errors (`422`) return FastAPI's `HTTPValidationError` where `detail` is a list of validation error objects.
 """.strip()
 
 OPENAPI_TAGS = [

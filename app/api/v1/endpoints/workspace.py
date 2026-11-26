@@ -113,7 +113,6 @@ async def list_members(
     summary="Add a new member to a workspace",
     description="Adds a user as EDITOR or VIEWER. Requires workspace OWNER or global ADMIN.",
     responses={
-        **BAD_REQUEST_RESPONSE,
         **FORBIDDEN_RESPONSE,
         **NOT_FOUND_RESPONSE,
         **CONFLICT_RESPONSE,

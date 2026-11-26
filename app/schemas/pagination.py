@@ -24,7 +24,7 @@ def get_pagination(
         Query(
             ge=1,
             le=MAX_LIMIT,
-            description="Maximum number of items per page (1-100)",
+            description=f"Maximum number of items per page (1-{MAX_LIMIT})",
         ),
     ] = DEFAULT_LIMIT,
 ) -> PaginationParams:
