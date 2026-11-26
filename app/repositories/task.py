@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -6,6 +8,15 @@ from app.models import Project, Task, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, UserRole, WorkspaceRole
 from app.repositories.base import BaseRepository
 from app.schemas.pagination import PaginationParams
+
+
+@dataclass(frozen=True, slots=True)
+class AssigneeInfo:
+    user_id: int
+    email: str
+    full_name: str
+    is_active: bool
+    role: WorkspaceRole | None
 
 
 class TaskRepository(BaseRepository[Task]):
@@ -39,9 +50,12 @@ class TaskRepository(BaseRepository[Task]):
 
     async def get_assignee_info(
         self, workspace_id: int, user_id: int
-    ) -> tuple[bool, WorkspaceRole | None] | None:
+    ) -> AssigneeInfo | None:
         stmt = (
             select(
+                User.id,
+                User.email,
+                User.full_name,
                 User.is_active,
                 Workspace.owner_id,
                 WorkspaceMember.role,
@@ -58,9 +72,15 @@ class TaskRepository(BaseRepository[Task]):
         row = (await self.session.execute(stmt)).first()
         if row is None:
             return None
-        is_active, owner_id, member_role = row
+        found_id, email, full_name, is_active, owner_id, member_role = row
         role = WorkspaceRole.OWNER if owner_id == user_id else member_role
-        return bool(is_active), role
+        return AssigneeInfo(
+            user_id=found_id,
+            email=email,
+            full_name=full_name,
+            is_active=bool(is_active),
+            role=role,
+        )
 
     async def list_visible(
         self,
