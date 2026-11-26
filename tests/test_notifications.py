@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import smtplib
 import ssl
 import subprocess
 import sys
@@ -14,7 +15,13 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.config import Settings, settings
+from app.core.config import (
+    DEFAULT_SMTP_FROM_EMAIL,
+    DEFAULT_SMTP_PORT,
+    DEFAULT_SMTP_TIMEOUT_SECONDS,
+    Settings,
+    settings,
+)
 from app.core.database import get_db
 from app.core.notifications import (
     LoggingAndSmtpTaskNotifier,
@@ -24,7 +31,7 @@ from app.core.notifications import (
 from app.core.security import create_token, read_key
 from app.dependencies import get_task_assignment_notifier
 from app.main import app
-from app.models import Project, User, Workspace, WorkspaceMember
+from app.models import Project, Task, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,13 +118,15 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
                     email=f"{name}@example.com",
                     full_name=name.title(),
                     hashed_password="not-a-real-hash",
-                    role=UserRole.MEMBER,
+                    role=UserRole.ADMIN if name == "root" else UserRole.MEMBER,
+                    is_active=(name != "inactive"),
                 )
-                for name in ("alice", "bob", "carol", "dave", "outsider")
+                for name in ("alice", "bob", "carol", "dave", "inactive", "outsider", "root")
             }
             session.add_all(users.values())
             await session.flush()
             self.uid = {name: user.id for name, user in users.items()}
+            self.urole = {name: user.role for name, user in users.items()}
 
             ws = Workspace(name="Engineering", owner_id=self.uid["alice"])
             session.add(ws)
@@ -141,6 +150,11 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
                         user_id=self.uid["dave"],
                         role=WorkspaceRole.VIEWER,
                     ),
+                    WorkspaceMember(
+                        workspace_id=ws.id,
+                        user_id=self.uid["inactive"],
+                        role=WorkspaceRole.EDITOR,
+                    ),
                 ]
             )
 
@@ -154,10 +168,21 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
             await session.flush()
             self.active_project_id = active_proj.id
             self.archived_project_id = archived_proj.id
+
+            archived_task = Task(
+                project_id=archived_proj.id,
+                title="Frozen task",
+                created_by=self.uid["alice"],
+            )
+            session.add(archived_task)
+            await session.flush()
+            self.archived_task_id = archived_task.id
             await session.commit()
 
     def headers(self, user_name: str) -> dict[str, str]:
-        token, _ = create_token(self.uid[user_name], UserRole.MEMBER.value, TokenType.ACCESS)
+        token, _ = create_token(
+            self.uid[user_name], self.urole[user_name].value, TokenType.ACCESS
+        )
         return {"Authorization": f"Bearer {token}"}
 
     async def test_create_task_with_assignee_dispatches_background_notification(self):
@@ -189,6 +214,22 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.assigned_by_name, "Alice")
         self.assertEqual(event.priority, "HIGH")
         self.assertIsNotNone(event.due_date)
+
+    async def test_admin_assigning_task_dispatches_notification(self):
+        created = await self.client.post(
+            TASKS_API,
+            headers=self.headers("root"),
+            json={
+                "project_id": self.active_project_id,
+                "title": "Admin assigned task",
+                "assignee_id": self.uid["bob"],
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertEqual(len(self.notifier.events), 1)
+        self.assertEqual(self.notifier.events[0].assigned_by_id, self.uid["root"])
+        self.assertEqual(self.notifier.events[0].assigned_by_name, "Root")
+        self.assertEqual(self.notifier.events[0].assignee_id, self.uid["bob"])
 
     async def test_create_task_unassigned_or_self_assigned_skips_notification(self):
         unassigned = await self.client.post(
@@ -278,9 +319,17 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.notifier.events), 2)
 
     async def test_failed_task_mutations_never_notify(self):
-        # Viewer assignee (400), non-member assignee (400), viewer creator (403),
-        # unknown project (404), archived project (400).
-        cases = [
+        # Seed a valid unassigned task (0 notifications) to verify failed PATCH paths.
+        seed_res = await self.client.post(
+            TASKS_API,
+            headers=self.headers("alice"),
+            json={"project_id": self.active_project_id, "title": "Base task"},
+        )
+        self.assertEqual(seed_res.status_code, 201, seed_res.text)
+        task_id = seed_res.json()["id"]
+        self.assertEqual(self.notifier.events, [])
+
+        post_cases = [
             (
                 "alice",
                 {
@@ -296,6 +345,15 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
                     "project_id": self.active_project_id,
                     "title": "Bad outsider assignee",
                     "assignee_id": self.uid["outsider"],
+                },
+                400,
+            ),
+            (
+                "alice",
+                {
+                    "project_id": self.active_project_id,
+                    "title": "Inactive assignee",
+                    "assignee_id": self.uid["inactive"],
                 },
                 400,
             ),
@@ -327,9 +385,24 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
                 400,
             ),
         ]
-        for actor, payload, expected_status in cases:
+        for actor, payload, expected_status in post_cases:
             res = await self.client.post(
                 TASKS_API, headers=self.headers(actor), json=payload
+            )
+            self.assertEqual(res.status_code, expected_status, res.text)
+
+        patch_cases = [
+            ("alice", task_id, {"assignee_id": self.uid["dave"]}, 400),
+            ("alice", task_id, {"assignee_id": self.uid["outsider"]}, 400),
+            ("alice", task_id, {"assignee_id": self.uid["inactive"]}, 400),
+            ("dave", task_id, {"assignee_id": self.uid["bob"]}, 403),
+            ("carol", task_id, {"assignee_id": self.uid["bob"]}, 403),
+            ("alice", 99999, {"assignee_id": self.uid["bob"]}, 404),
+            ("alice", self.archived_task_id, {"assignee_id": self.uid["bob"]}, 400),
+        ]
+        for actor, target_id, payload, expected_status in patch_cases:
+            res = await self.client.patch(
+                f"{TASKS_API}{target_id}", headers=self.headers(actor), json=payload
             )
             self.assertEqual(res.status_code, expected_status, res.text)
 
@@ -389,7 +462,11 @@ class TaskAssignmentNotificationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LoggingAndSmtpTaskNotifierUnitTests(unittest.IsolatedAsyncioTestCase):
-    def _sample_event(self, title: str = "Ship API") -> TaskAssignedEvent:
+    def _sample_event(
+        self,
+        title: str = "Ship API",
+        due_date: datetime | None = datetime(2026, 12, 1, 17, 0, tzinfo=timezone.utc),
+    ) -> TaskAssignedEvent:
         return TaskAssignedEvent(
             task_id=42,
             task_title=title,
@@ -401,7 +478,7 @@ class LoggingAndSmtpTaskNotifierUnitTests(unittest.IsolatedAsyncioTestCase):
             assigned_by_id=1,
             assigned_by_name="Alice",
             priority="URGENT",
-            due_date=datetime(2026, 12, 1, 17, 0, tzinfo=timezone.utc),
+            due_date=due_date,
         )
 
     async def test_smtp_enabled_sends_sanitized_tls_email_and_authenticates(self):
@@ -444,10 +521,12 @@ class LoggingAndSmtpTaskNotifierUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alice assigned you to a task in TaskHub", body)
         self.assertIn("2026-12-01T17:00:00+00:00", body)
 
-    async def test_smtp_without_tls_or_auth_skips_starttls_and_login(self):
+    async def test_smtp_without_tls_or_auth_and_blank_from_or_due_date(self):
         notifier = LoggingAndSmtpTaskNotifier(
             smtp_host="localhost",
             smtp_port=1025,
+            smtp_username="   ",
+            smtp_from_email="",
             smtp_use_tls=False,
         )
         smtp_client = MagicMock()
@@ -458,19 +537,52 @@ class LoggingAndSmtpTaskNotifierUnitTests(unittest.IsolatedAsyncioTestCase):
             patch("app.core.notifications.smtplib.SMTP", return_value=smtp_cm) as smtp_cls,
             self.assertLogs("app.core.notifications", level="INFO"),
         ):
-            await notifier.notify_task_assigned(self._sample_event())
+            await notifier.notify_task_assigned(self._sample_event(due_date=None))
 
-        smtp_cls.assert_called_once_with("localhost", 1025, timeout=5.0)
+        smtp_cls.assert_called_once_with(
+            "localhost", 1025, timeout=DEFAULT_SMTP_TIMEOUT_SECONDS
+        )
         smtp_client.starttls.assert_not_called()
         smtp_client.login.assert_not_called()
         smtp_client.send_message.assert_called_once()
+        sent_msg = smtp_client.send_message.call_args.args[0]
+        self.assertEqual(sent_msg["From"], DEFAULT_SMTP_FROM_EMAIL)
+        self.assertNotIn("Due date:", sent_msg.get_content())
+
+    async def test_blank_from_email_does_not_reuse_api_key_username(self):
+        notifier = LoggingAndSmtpTaskNotifier(
+            smtp_host="smtp.sendgrid.net",
+            smtp_username="apikey",
+            smtp_password="sg-secret",
+            smtp_from_email="",
+        )
+        self.assertEqual(notifier.smtp_from_email, DEFAULT_SMTP_FROM_EMAIL)
+
+    async def test_smtp_exception_is_caught_fail_open_by_dispatcher(self):
+        notifier = LoggingAndSmtpTaskNotifier(smtp_host="smtp.example.com")
+
+        with (
+            patch(
+                "app.core.notifications.smtplib.SMTP",
+                side_effect=smtplib.SMTPException("connection refused"),
+            ),
+            self.assertLogs("app.core.notifications", level="ERROR") as logs,
+        ):
+            await dispatch_task_assigned(notifier, self._sample_event())
+
+        self.assertTrue(
+            any("Failed to deliver task assignment notification" in line for line in logs.output)
+        )
 
     def test_smtp_settings_validation(self):
         default_cfg = Settings(_env_file=None, DATABASE_URL="sqlite+aiosqlite://")
         self.assertEqual(default_cfg.SMTP_HOST, "")
-        self.assertEqual(default_cfg.SMTP_PORT, 587)
+        self.assertEqual(default_cfg.SMTP_PORT, DEFAULT_SMTP_PORT)
+        self.assertEqual(default_cfg.SMTP_FROM_EMAIL, DEFAULT_SMTP_FROM_EMAIL)
         self.assertTrue(default_cfg.SMTP_USE_TLS)
-        self.assertEqual(default_cfg.SMTP_TIMEOUT_SECONDS, 5.0)
+        self.assertEqual(
+            default_cfg.SMTP_TIMEOUT_SECONDS, DEFAULT_SMTP_TIMEOUT_SECONDS
+        )
 
         self.assertFalse(
             Settings(
