@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core import messages
@@ -10,6 +12,7 @@ from app.core.cache import (
     workspace_version_key,
 )
 from app.core.exceptions import BadRequestError, ForbiddenError
+from app.core.notifications import TaskAssignedEvent
 from app.core.permissions import (
     WRITE_ROLES,
     can_create_task,
@@ -18,12 +21,41 @@ from app.core.permissions import (
 )
 from app.models import Task, User
 from app.models.enums import UserRole
-from app.repositories.task import TaskRepository
+from app.repositories.task import AssigneeInfo, TaskRepository
 from app.schemas.pagination import PaginatedResponse, PaginationParams
 from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from app.services.base import ScopedEntity, ScopedService
 
 TaskPage = PaginatedResponse[TaskResponse]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskWriteResult:
+    task: Task
+    assigned_event: TaskAssignedEvent | None = None
+
+
+def _build_assigned_event(
+    task: Task,
+    workspace_id: int,
+    assignee: AssigneeInfo | None,
+    actor: User,
+) -> TaskAssignedEvent | None:
+    if assignee is None or assignee.user_id == actor.id:
+        return None
+    return TaskAssignedEvent(
+        task_id=task.id,
+        task_title=task.title,
+        project_id=task.project_id,
+        workspace_id=workspace_id,
+        assignee_id=assignee.user_id,
+        assignee_email=assignee.email,
+        assignee_name=assignee.full_name,
+        assigned_by_id=actor.id,
+        assigned_by_name=actor.full_name,
+        priority=task.priority.value,
+        due_date=task.due_date,
+    )
 
 
 class CachedTaskPage(BaseModel):
@@ -52,29 +84,39 @@ class TaskService(ScopedService[TaskRepository]):
             task_id, user, self.repository.get_with_workspace, messages.TASK_NOT_FOUND
         )
 
-    async def _ensure_assignee(self, workspace_id: int, assignee_id: int) -> None:
+    async def _ensure_assignee(
+        self, workspace_id: int, assignee_id: int
+    ) -> AssigneeInfo:
         info = await self.repository.get_assignee_info(workspace_id, assignee_id)
-        if info is None or info[1] is None:
+        if info is None or info.role is None:
             raise BadRequestError(messages.ASSIGNEE_NOT_IN_WORKSPACE)
-        is_active, role = info
-        if not is_active:
+        if not info.is_active:
             raise BadRequestError(messages.ASSIGNEE_INACTIVE)
-        if role not in WRITE_ROLES:
+        if info.role not in WRITE_ROLES:
             raise BadRequestError(messages.ASSIGNEE_INVALID_ROLE)
+        return info
 
-    async def create_task(self, data: TaskCreate, user: User) -> Task:
+    async def create_task(self, data: TaskCreate, user: User) -> TaskWriteResult:
         proj_scope = await self.load_project_scope(data.project_id, user)
         if not can_create_task(proj_scope.role):
             raise ForbiddenError(messages.FORBIDDEN)
         self._ensure_project_active(proj_scope.project_status)
+        assignee_info: AssigneeInfo | None = None
         if data.assignee_id is not None:
-            await self._ensure_assignee(proj_scope.workspace_id, data.assignee_id)
+            assignee_info = await self._ensure_assignee(
+                proj_scope.workspace_id, data.assignee_id
+            )
         task = await self.repository.create(**data.model_dump(), created_by=user.id)
         await self.session.commit()
         await self.task_cache_invalidator.invalidate(
             workspace_ids=[proj_scope.workspace_id]
         )
-        return task
+        return TaskWriteResult(
+            task=task,
+            assigned_event=_build_assigned_event(
+                task, proj_scope.workspace_id, assignee_info, user
+            ),
+        )
 
     async def list_tasks(
         self,
@@ -205,20 +247,36 @@ class TaskService(ScopedService[TaskRepository]):
         scoped = await self._load(task_id, user)
         return scoped.entity
 
-    async def update_task(self, task_id: int, data: TaskUpdate, user: User) -> Task:
+    async def update_task(
+        self, task_id: int, data: TaskUpdate, user: User
+    ) -> TaskWriteResult:
         scoped = await self._load(task_id, user)
         if not can_modify_task(scoped.role, scoped.entity, user):
             raise ForbiddenError(messages.FORBIDDEN)
         self._ensure_project_active(scoped.project_status)
+        previous_assignee_id = scoped.entity.assignee_id
         changes = data.model_dump(exclude_unset=True)
+        assignee_info: AssigneeInfo | None = None
         if changes.get("assignee_id") is not None:
-            await self._ensure_assignee(scoped.workspace_id, changes["assignee_id"])
+            assignee_info = await self._ensure_assignee(
+                scoped.workspace_id, changes["assignee_id"]
+            )
         updated = await self.repository.update(scoped.entity, changes)
         await self.session.commit()
         await self.task_cache_invalidator.invalidate(
             workspace_ids=[scoped.workspace_id]
         )
-        return updated
+        notify_target = (
+            assignee_info
+            if assignee_info is not None and updated.assignee_id != previous_assignee_id
+            else None
+        )
+        return TaskWriteResult(
+            task=updated,
+            assigned_event=_build_assigned_event(
+                updated, scoped.workspace_id, notify_target, user
+            ),
+        )
 
     async def delete_task(self, task_id: int, user: User) -> None:
         scoped = await self._load(task_id, user)

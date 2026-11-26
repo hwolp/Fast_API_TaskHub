@@ -6,8 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import messages
 from app.core.cache import RedisCache, TaskListCacheInvalidator
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import UnauthorizedError
+from app.core.notifications import (
+    LoggingAndSmtpTaskNotifier,
+    TaskAssignmentNotifier,
+)
 from app.core.security import decode_token
 from app.models import User
 from app.models.enums import TokenType
@@ -94,6 +99,18 @@ def get_comment_service(session: SessionDep) -> CommentService:
     return CommentService(CommentRepository(session))
 
 
+def get_task_assignment_notifier() -> TaskAssignmentNotifier:
+    return LoggingAndSmtpTaskNotifier(
+        smtp_host=settings.SMTP_HOST,
+        smtp_port=settings.SMTP_PORT,
+        smtp_username=settings.SMTP_USERNAME,
+        smtp_password=settings.SMTP_PASSWORD,
+        smtp_from_email=settings.SMTP_FROM_EMAIL,
+        smtp_use_tls=settings.SMTP_USE_TLS,
+        smtp_timeout_seconds=settings.SMTP_TIMEOUT_SECONDS,
+    )
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     repository: Annotated[AuthRepository, Depends(get_auth_repository)],
@@ -114,3 +131,6 @@ WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
 LabelServiceDep = Annotated[LabelService, Depends(get_label_service)]
 CommentServiceDep = Annotated[CommentService, Depends(get_comment_service)]
+TaskAssignmentNotifierDep = Annotated[
+    TaskAssignmentNotifier, Depends(get_task_assignment_notifier)
+]

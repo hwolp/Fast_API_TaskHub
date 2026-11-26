@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.api.v1.params import IdPath
 from app.api.v1.responses import (
@@ -8,9 +8,15 @@ from app.api.v1.responses import (
     FORBIDDEN_RESPONSE,
     NOT_FOUND_RESPONSE,
 )
+from app.core.notifications import (
+    TaskAssignedEvent,
+    TaskAssignmentNotifier,
+    dispatch_task_assigned,
+)
 from app.dependencies import (
     CurrentUser,
     LabelServiceDep,
+    TaskAssignmentNotifierDep,
     TaskServiceDep,
 )
 from app.schemas.pagination import PaginatedResponse, PaginationDep
@@ -19,18 +25,35 @@ from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
 router = APIRouter()
 
 
+def _schedule_assignment_notification(
+    background_tasks: BackgroundTasks,
+    notifier: TaskAssignmentNotifier,
+    event: TaskAssignedEvent | None,
+) -> None:
+    if event is not None:
+        background_tasks.add_task(dispatch_task_assigned, notifier, event)
+
+
 @router.post(
     "/",
     response_model=TaskResponse,
     status_code=201,
     summary="Create a new task in a project",
+    description="Creates a task in an active project. Schedules a background assignment notification when assigned to another user.",
     responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
 )
 async def create_task(
-    data: TaskCreate, user: CurrentUser, service: TaskServiceDep
+    data: TaskCreate,
+    user: CurrentUser,
+    service: TaskServiceDep,
+    background_tasks: BackgroundTasks,
+    notifier: TaskAssignmentNotifierDep,
 ) -> TaskResponse:
-    task = await service.create_task(data, user)
-    return TaskResponse.model_validate(task)
+    result = await service.create_task(data, user)
+    _schedule_assignment_notification(
+        background_tasks, notifier, result.assigned_event
+    )
+    return TaskResponse.model_validate(result.task)
 
 
 @router.get(
@@ -68,13 +91,22 @@ async def get_task(
     "/{task_id}",
     response_model=TaskResponse,
     summary="Update task fields or assignee",
+    description="Updates task fields or assignee in an active project. Schedules a background notification when reassigned to another user.",
     responses={**BAD_REQUEST_RESPONSE, **FORBIDDEN_RESPONSE, **NOT_FOUND_RESPONSE},
 )
 async def update_task(
-    task_id: IdPath, data: TaskUpdate, user: CurrentUser, service: TaskServiceDep
+    task_id: IdPath,
+    data: TaskUpdate,
+    user: CurrentUser,
+    service: TaskServiceDep,
+    background_tasks: BackgroundTasks,
+    notifier: TaskAssignmentNotifierDep,
 ) -> TaskResponse:
-    updated = await service.update_task(task_id, data, user)
-    return TaskResponse.model_validate(updated)
+    result = await service.update_task(task_id, data, user)
+    _schedule_assignment_notification(
+        background_tasks, notifier, result.assigned_event
+    )
+    return TaskResponse.model_validate(result.task)
 
 
 @router.delete(

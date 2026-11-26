@@ -1,6 +1,10 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_SMTP_PORT = 587
+DEFAULT_SMTP_FROM_EMAIL = "noreply@taskhub.local"
+DEFAULT_SMTP_TIMEOUT_SECONDS = 5.0
+
 TRUE_BOOL_VALUES = frozenset({"true", "1", "yes", "t", "on", "dev", "development"})
 FALSE_BOOL_VALUES = frozenset(
     {
@@ -34,8 +38,15 @@ class Settings(BaseSettings):
     REDIS_URL: str = ""
     TASK_LIST_CACHE_TTL_SECONDS: int = Field(default=60, gt=0)
     REDIS_SOCKET_TIMEOUT_SECONDS: float = Field(default=0.25, gt=0)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = Field(default=DEFAULT_SMTP_PORT, ge=1, le=65535)
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = DEFAULT_SMTP_FROM_EMAIL
+    SMTP_USE_TLS: bool = True
+    SMTP_TIMEOUT_SECONDS: float = Field(default=DEFAULT_SMTP_TIMEOUT_SECONDS, gt=0)
 
-    @field_validator("DEBUG", "ENABLE_DOCS", mode="before")
+    @field_validator("DEBUG", "ENABLE_DOCS", "SMTP_USE_TLS", mode="before")
     @classmethod
     def parse_bool_flags(cls, v):
         if isinstance(v, bool):
