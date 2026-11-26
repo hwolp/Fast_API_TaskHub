@@ -99,8 +99,6 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         workspace, role = await self._load(workspace_id, user)
         if not can_manage_members(role):
             raise ForbiddenError(messages.FORBIDDEN)
-        if data.role == WorkspaceRole.OWNER:
-            raise BadRequestError(messages.CANNOT_ASSIGN_OWNER_ROLE)
         if not await self.repository.user_exists(data.user_id):
             raise NotFoundError(messages.USER_NOT_FOUND)
         if (
@@ -125,8 +123,6 @@ class WorkspaceService(ScopedService[WorkspaceRepository]):
         workspace, role = await self._load(workspace_id, user)
         if not can_manage_members(role):
             raise ForbiddenError(messages.FORBIDDEN)
-        if data.role == WorkspaceRole.OWNER:
-            raise BadRequestError(messages.CANNOT_ASSIGN_OWNER_ROLE)
         if member_user_id == workspace.owner_id:
             raise BadRequestError(messages.CANNOT_MODIFY_WORKSPACE_OWNER)
         member = await self.repository.get_member(workspace_id, member_user_id)

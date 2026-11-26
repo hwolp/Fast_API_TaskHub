@@ -6,7 +6,14 @@ from app.api.v1.endpoints.auth import jwks_router
 from app.api.v1.router import api_router
 from app.core.cache import RedisCache
 from app.core.config import settings
+from app.core.openapi import (
+    API_VERSION,
+    OPENAPI_DESCRIPTION,
+    OPENAPI_TAGS,
+    SWAGGER_UI_PARAMETERS,
+)
 from app.core.security import load_keys
+from app.schemas.common import HEALTH_MESSAGE_OK, HEALTH_STATUS_OK, HealthResponse
 
 
 @asynccontextmanager
@@ -29,22 +36,39 @@ async def lifespan(app: FastAPI):
             await cache.close()
 
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    description="TaskHub",
-    version="1.0.0",
-    debug=settings.DEBUG,
-    lifespan=lifespan,
-)
+def create_app(*, enable_docs: bool | None = None) -> FastAPI:
+    docs_enabled = settings.ENABLE_DOCS if enable_docs is None else enable_docs
+    application = FastAPI(
+        title=settings.PROJECT_NAME,
+        description=OPENAPI_DESCRIPTION,
+        version=API_VERSION,
+        debug=settings.DEBUG,
+        lifespan=lifespan,
+        openapi_tags=OPENAPI_TAGS,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+        swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
+    )
 
-app.include_router(jwks_router)
-app.include_router(api_router, prefix=settings.API_V1_STR)
+    application.include_router(jwks_router)
+    application.include_router(api_router, prefix=settings.API_V1_STR)
+
+    @application.get(
+        "/healthy",
+        tags=["system"],
+        response_model=HealthResponse,
+        summary="Check service health",
+        description="Returns service liveness status and API version.",
+    )
+    async def healthy_check() -> HealthResponse:
+        return HealthResponse(
+            status=HEALTH_STATUS_OK,
+            message=HEALTH_MESSAGE_OK,
+            version=API_VERSION,
+        )
+
+    return application
 
 
-@app.get("/healthy", tags=["system"])
-async def healthy_check():
-    return {
-        "status": "Healthy",
-        "message": "ok",
-        "version": "1.0.0",
-    }
+app = create_app()

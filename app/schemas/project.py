@@ -10,11 +10,35 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Tên dự án")
     description: str | None = Field(default=None, description="Mô tả dự án")
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "workspace_id": 1,
+                "name": "TaskHub Backend",
+                "description": "Core REST API and worker services",
+            }
+        }
+    )
+
 
 class ProjectUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100, description="Tên dự án")
+    name: str | None = Field(
+        default=None, min_length=1, max_length=100, description="Tên dự án"
+    )
     description: str | None = Field(default=None, description="Mô tả dự án")
-    status: ProjectStatus | None = Field(default=None, description="Trạng thái dự án")
+    status: ProjectStatus | None = Field(
+        default=None, description="Trạng thái dự án"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "TaskHub Backend v2",
+                "description": "Updated scope",
+                "status": "ACTIVE",
+            }
+        }
+    )
 
     @model_validator(mode="after")
     def reject_null_for_required_columns(self) -> "ProjectUpdate":
@@ -32,4 +56,16 @@ class ProjectResponse(BaseModel):
     status: ProjectStatus
     created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "workspace_id": 1,
+                "name": "TaskHub Backend",
+                "description": "Core REST API and worker services",
+                "status": "ACTIVE",
+                "created_at": "2026-11-25T10:00:00Z",
+            }
+        },
+    )
