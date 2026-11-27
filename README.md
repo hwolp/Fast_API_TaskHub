@@ -4,6 +4,30 @@ TaskHub là hệ thống backend quản lý công việc và dự án, được 
 
 ---
 
+## Chạy với Docker Compose
+
+Từ thư mục gốc, dùng Docker Compose v2 để khởi động FastAPI, MySQL và Redis.
+
+```powershell
+docker compose up
+```
+
+Trước khi chạy lần đầu, sao chép `.env.example` thành `.env` và đặt giá trị cho `MYSQL_PASSWORD` và `MYSQL_ROOT_PASSWORD` (Compose đọc thông tin DB từ `.env`, không hardcode mật khẩu trong `compose.yaml`). App đợi MySQL và Redis sẵn sàng, tạo cặp khóa JWT trong volume nếu cần, rồi chạy migration Alembic trước khi mở API.
+
+Mặc định `ENABLE_DOCS=False` (fail-closed) nên `/docs`, `/redoc` và `/openapi.json` sẽ tắt. Để mở Swagger UI (`http://localhost:8000/docs`) hoặc ReDoc (`http://localhost:8000/redoc`) ở môi trường local, đặt `ENABLE_DOCS=True` trong `.env`. Endpoint kiểm tra trạng thái `http://localhost:8000/healthy` luôn được bật.
+
+Khi tạo hoặc gán task cho thành viên khác, background task mặc định chạy chế độ log-only (`SMTP_HOST=""`) và ghi thông báo ra stdout của container (`docker compose logs -f app`). Nếu muốn gửi email thật, điền `SMTP_HOST` và các biến `SMTP_*` trong `.env`.
+
+Nếu cổng `8000` đã được dùng, thêm `TASKHUB_PORT=8001` vào `.env` để mở app tại cổng `8001`.
+
+```powershell
+docker compose ps
+docker compose logs -f app
+docker compose exec app python -m alembic current
+```
+
+Dùng `docker compose up --build` sau khi thay đổi mã nguồn hoặc thư viện. Dừng stack bằng `docker compose down`. Dữ liệu MySQL và khóa JWT được giữ trong named volumes cho lần chạy sau.
+
 # Cấu trúc thư mục
 
 ```text
