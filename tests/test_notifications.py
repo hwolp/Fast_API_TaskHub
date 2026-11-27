@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import logging
+import logging.config
 import os
 from pathlib import Path
 import smtplib
@@ -14,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from uvicorn.config import LOGGING_CONFIG
 
 from app.core.config import (
     DEFAULT_SMTP_FROM_EMAIL,
@@ -30,7 +33,7 @@ from app.core.notifications import (
 )
 from app.core.security import create_token, read_key
 from app.dependencies import get_task_assignment_notifier
-from app.main import app
+from app.main import app, configure_logging
 from app.models import Project, Task, User, Workspace, WorkspaceMember
 from app.models.enums import ProjectStatus, TokenType, UserRole, WorkspaceRole
 
@@ -611,3 +614,32 @@ class LoggingAndSmtpTaskNotifierUnitTests(unittest.IsolatedAsyncioTestCase):
                     DATABASE_URL="sqlite+aiosqlite://",
                     **bad_kwargs,
                 )
+
+    def test_configure_logging_enables_notification_info_logs_after_uvicorn_dictconfig(self):
+        app_logger = logging.getLogger("app")
+        prev_level = app_logger.level
+        prev_handlers = list(app_logger.handlers)
+        prev_propagate = app_logger.propagate
+
+        def restore_app_logger() -> None:
+            app_logger.handlers[:] = prev_handlers
+            app_logger.setLevel(prev_level)
+            app_logger.propagate = prev_propagate
+
+        self.addCleanup(restore_app_logger)
+
+        logging.config.dictConfig(LOGGING_CONFIG)
+        app_logger.handlers.clear()
+        app_logger.setLevel(logging.NOTSET)
+        app_logger.propagate = True
+
+        notif_logger = logging.getLogger("app.core.notifications")
+        self.assertEqual(notif_logger.getEffectiveLevel(), logging.WARNING)
+        self.assertFalse(notif_logger.hasHandlers())
+
+        configure_logging()
+        configure_logging()
+
+        self.assertEqual(notif_logger.getEffectiveLevel(), logging.INFO)
+        self.assertTrue(notif_logger.hasHandlers())
+        self.assertEqual(len(app_logger.handlers), 1)

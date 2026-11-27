@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import logging
+import sys
 
 from fastapi import FastAPI
 
@@ -16,8 +18,21 @@ from app.core.security import load_keys
 from app.schemas.common import HEALTH_MESSAGE_OK, HEALTH_STATUS_OK, HealthResponse
 
 
+def configure_logging() -> None:
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(logging.INFO)
+    if not app_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+        )
+        app_logger.addHandler(handler)
+    app_logger.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     load_keys()
     cache = (
         RedisCache(
@@ -37,6 +52,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(*, enable_docs: bool | None = None) -> FastAPI:
+    configure_logging()
     docs_enabled = settings.ENABLE_DOCS if enable_docs is None else enable_docs
     application = FastAPI(
         title=settings.PROJECT_NAME,
